@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 
 	"github.com/goccy/go-yaml"
@@ -16,7 +17,11 @@ var DefaultConfigPaths = []string{
 type Config struct {
 	path string
 
-	Greet GreetConfig
+	Source SourceConfig `yaml:"source"`
+	Target TargetConfig `yaml:"target"`
+
+	Since  Since `yaml:"since"`
+	DryRun bool  `yaml:"dryRun"`
 
 	Otel OtelConfig
 }
@@ -51,6 +56,20 @@ func (c *Config) Path() string {
 }
 
 func (c *Config) Evaluate() error {
-	z.FallbackP(&c.Greet.Format, "Hello, %s!")
+	// The target group defaults to the source owner. Mirroring acme/* into a
+	// group named something else is possible and occasionally wanted, but the
+	// same name is what anyone would assume from looking at either side.
+	z.FallbackP(&c.Target.Group, c.Source.Owner)
+
+	if c.Source.Owner == "" {
+		return errors.New("source.owner is required")
+	}
+	if c.Source.Token == "" {
+		return errors.New("source.token is required")
+	}
+	if c.Target.Token == "" {
+		return errors.New("target.token is required")
+	}
+
 	return nil
 }

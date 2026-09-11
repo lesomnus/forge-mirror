@@ -1,4 +1,46 @@
-# Greeting configuration (used by the `greet` subcommand).
-greet:
-  # Format string; %s is replaced with the name argument.
-  format: "Hello, %s!"
+# `${env:NAME}` is resolved before this file is parsed, the way the
+# OpenTelemetry Collector resolves it, so a token is named here without being
+# written here.
+
+source:
+  token: "${env:FORGE_MIRROR_SOURCE_TOKEN}"
+  owner: acme
+
+  # Which repositories to mirror. Empty means every one the owner has.
+  #
+  # Naming them is how a first careful run, or a test, keeps the blast radius
+  # small. It is not only for tests: pointing this at an organisation and
+  # letting it decide the scope is a choice, and it should be one somebody
+  # made on purpose.
+  repos: []
+
+  # baseUrl: https://github.example.com/api/v3/   # self-hosted
+
+target:
+  token: "${env:FORGE_MIRROR_TARGET_TOKEN}"
+  baseUrl: https://gitlab.example.com/
+
+  # Defaults to source.owner.
+  # group: acme
+
+# How far back to look. This bounds the first run and limits the damage of a
+# lost cursor; it is not the cursor itself. Empty means no limit.
+since: 720h
+
+dryRun: false
+
+# Telemetry. Nothing configured means nothing is emitted, which is right for a
+# workstation and wrong for the cluster.
+#
+# In the cluster this pushes over OTLP rather than being scraped: this is a
+# CronJob, so it is gone before a scrape could reach it.
+#
+# otel:
+#   exporters:
+#     otlp/gateway:
+#       endpoint: otel-gateway.monitoring.svc.cluster.local:4317
+#   providers:
+#     meter:
+#       exporters: [otlp/gateway]
+#     tracer:
+#       exporters: [otlp/gateway]

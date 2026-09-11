@@ -20,7 +20,7 @@ func NewCmdRoot() *xli.Command {
 		Commands: []*xli.Command{
 			NewCmdVersion(),
 			NewCmdConfig(),
-			NewCmdGreet(),
+			NewCmdMirror(),
 		},
 
 		Handler: xli.Chain(

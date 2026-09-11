@@ -93,7 +93,7 @@ func TestEnvNames(t *testing.T) {
 		x := require.New(t)
 
 		vs := config.EnvNames(&config.Config{})
-		x.Contains(vs, "FORGE_MIRROR_GREET_FORMAT")
+		x.Contains(vs, "FORGE_MIRROR_SOURCE_OWNER")
 		x.NotContains(vs, "FORGE_MIRROR_PATH")
 	})
 }
@@ -249,11 +249,50 @@ func TestOverrideFromEnvThenEvaluate(t *testing.T) {
 	x := require.New(t)
 
 	var c config.Config
-	_, err := config.OverrideFromEnv(&c, []string{"FORGE_MIRROR_GREET_FORMAT=Hi, %s."})
+	_, err := config.OverrideFromEnv(&c, []string{
+		"FORGE_MIRROR_SOURCE_OWNER=acme",
+		"FORGE_MIRROR_SOURCE_TOKEN=s",
+		"FORGE_MIRROR_TARGET_TOKEN=t",
+		"FORGE_MIRROR_TARGET_GROUP=widgets",
+	})
 	x.NoError(err)
 	x.NoError(c.Evaluate())
 
-	x.Equal("Hi, %s.", c.Greet.Format)
+	x.Equal("acme", c.Source.Owner)
+
+	// Evaluate defaults the group to the source owner, and must not overwrite
+	// the one the environment named.
+	x.Equal("widgets", c.Target.Group)
+}
+
+// The group is defaulted only when nothing said otherwise.
+func TestTargetGroupDefaultsToSourceOwner(t *testing.T) {
+	x := require.New(t)
+
+	var c config.Config
+	_, err := config.OverrideFromEnv(&c, []string{
+		"FORGE_MIRROR_SOURCE_OWNER=acme",
+		"FORGE_MIRROR_SOURCE_TOKEN=s",
+		"FORGE_MIRROR_TARGET_TOKEN=t",
+	})
+	x.NoError(err)
+	x.NoError(c.Evaluate())
+
+	x.Equal("acme", c.Target.Group)
+}
+
+// A run with no source owner cannot do anything useful. Saying so at startup
+// beats a confusing failure part way through.
+func TestSourceOwnerIsRequired(t *testing.T) {
+	x := require.New(t)
+
+	var c config.Config
+	_, err := config.OverrideFromEnv(&c, []string{
+		"FORGE_MIRROR_SOURCE_TOKEN=s",
+		"FORGE_MIRROR_TARGET_TOKEN=t",
+	})
+	x.NoError(err)
+	x.Error(c.Evaluate())
 }
 
 var _ yaml.BytesUnmarshaler = (*Whole)(nil)

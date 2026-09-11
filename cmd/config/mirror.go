@@ -2,22 +2,10 @@ package config
 
 import "time"
 
-type MirrorConfig struct {
-	Source SourceConfig `yaml:"source"`
-	Target TargetConfig `yaml:"target"`
-
-	// Since limits how far back to look on each run.
-	//
-	// It is a safety rail, not the incremental cursor: the cursor is whatever
-	// the last successful run recorded. This caps the first run — pointing the
-	// program at an organisation with a decade of issues and having it decide
-	// to fetch all of them is rarely what was meant — and bounds the damage of
-	// a lost cursor. Zero means no limit.
-	Since time.Duration `yaml:"since"`
-
-	// DryRun reports what would be written without writing it.
-	DryRun bool `yaml:"dryRun"`
-}
+// These sit at the top level of the configuration rather than under a `mirror:`
+// key. The program is the mirror; a section inside it saying so again buys
+// nothing and costs a doubled name everywhere the environment is involved —
+// `FORGE_MIRROR_MIRROR_SOURCE_TOKEN` rather than `FORGE_MIRROR_SOURCE_TOKEN`.
 
 type SourceConfig struct {
 	Token string `yaml:"token"`
@@ -38,7 +26,8 @@ type TargetConfig struct {
 	Token   string `yaml:"token"`
 	BaseURL string `yaml:"baseUrl"`
 
-	// Group is the namespace mirrored projects live in.
+	// Group is the namespace mirrored projects live in. Defaults to the
+	// source's owner.
 	Group string `yaml:"group"`
 }
 
@@ -54,3 +43,12 @@ func (c SourceConfig) Selects(name string) bool {
 	}
 	return false
 }
+
+// Since is how far back to look on each run.
+//
+// It is a safety rail, not the incremental cursor: the cursor is whatever the
+// last successful run recorded. This caps the first run — pointing the program
+// at an organisation with a decade of issues and having it decide to fetch all
+// of them is rarely what was meant — and bounds the damage of a lost cursor.
+// Zero means no limit.
+type Since = time.Duration
