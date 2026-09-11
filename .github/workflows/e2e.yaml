@@ -5,11 +5,17 @@
 # and is; what cannot be is whether a real GitLab hands back the same issue when
 # it is asked by marker, and therefore whether an hourly job quietly fills the
 # target with duplicates. Nobody watches a disaster-recovery copy closely enough
-# to notice that happening.
+# to notice.
 #
-# Not on every push: GitLab wants a few minutes and a few gigabytes even
-# pre-baked. On a schedule, on demand, and when the code that talks to a forge
-# changes.
+# GitLab is started from the stock image and seeded here rather than baked
+# beforehand. Baking was tried and does not work: the image declares
+# `/etc/gitlab`, `/var/log/gitlab` and `/var/opt/gitlab` as volumes, and
+# `docker commit` does not capture volume contents — so the database holding the
+# seeded token is exactly the part that is not saved. A cold boot is about three
+# minutes and seeding another forty seconds, which is a fine price for one less
+# image, one less workflow and one less registry to depend on.
+#
+# Not on every push all the same: four minutes and a few gigabytes is not free.
 name: e2e
 
 on:
@@ -24,11 +30,11 @@ on:
 
 permissions:
   contents: read
-  packages: read
 
 env:
   GITLAB: http://localhost:8080
-  # Only valid against the throwaway container started below. See testbed.yaml.
+  # Only ever valid against the throwaway container started below, which is
+  # created and destroyed inside this job. There is nothing behind it.
   GITLAB_TOKEN: glpat-forgemirrore2etoken
   FIXTURE_OWNER: lesomnus
   FIXTURE_REPO: forge-mirror-test
@@ -43,29 +49,66 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Start the testbed
+      - name: Start GitLab
         run: |
           set -eu
-          echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
-          docker run -d --name gitlab --shm-size 256m -p 8080:8080 \
-            ghcr.io/lesomnus/forge-mirror-testbed:latest
+          # ⚠️ `puma['port']` has to move off 8080. Omnibus defaults puma to
+          # 127.0.0.1:8080, and `external_url` with a port puts **nginx** on the
+          # same one. nginx wins, puma dies with EADDRINUSE, and runit restarts
+          # it forever — which from outside looks like a slow boot, because
+          # nginx and workhorse are up and answering 502 the whole time.
+          docker run -d --name gitlab \
+            --shm-size 256m \
+            -p 8080:8080 \
+            -e GITLAB_OMNIBUS_CONFIG="
+              external_url 'http://localhost:8080';
+              puma['port'] = 8081;
+              puma['worker_processes'] = 0;
+              sidekiq['max_concurrency'] = 2;
+              postgresql['shared_buffers'] = '128MB';
+              prometheus_monitoring['enable'] = false;
+              gitlab_rails['gitlab_shell_ssh_port'] = 2222;
+            " \
+            gitlab/gitlab-ce:19.3.1-ce.0
 
-          # Faster than a cold boot because the baked image is already
-          # configured, but still not fast: Omnibus starts every service again.
+      - name: Wait for it
+        run: |
+          set -eu
           for i in $(seq 1 60); do
-            # Inside the container: `/-/health` is limited to
-            # `monitoring_whitelist` (127.0.0.0/8), so asking from out here is
-            # refused no matter how healthy it is. The API the mirror uses has
-            # no such limit.
+            # From **inside** the container. GitLab limits `/-/health` to
+            # `monitoring_whitelist`, 127.0.0.0/8 by default, so the same
+            # request from the runner is refused however healthy GitLab is. The
+            # API the mirror uses has no such limit.
             if docker exec gitlab curl -fsS http://127.0.0.1:8080/-/health >/dev/null 2>&1; then
-              echo "healthy after $((i * 10))s"; exit 0
+              echo "healthy after $((i * 10))s"
+              exit 0
             fi
+            # A service whose pid changes between samples is restarting, not
+            # starting. That distinction is what a long timeout hides.
             [ $((i % 6)) -ne 0 ] || docker exec gitlab gitlab-ctl status 2>&1 | sed 's/^/  /' || true
             sleep 10
           done
-          echo "testbed did not come up" >&2
+          echo "GitLab did not come up" >&2
           docker exec gitlab gitlab-ctl status >&2 || true
+          docker exec gitlab tail -40 /var/log/gitlab/puma/current >&2 || true
           exit 1
+
+      - name: Seed a token
+        run: |
+          set -eu
+          docker exec gitlab gitlab-rails runner "
+            u = User.find_by_username('root')
+            t = u.personal_access_tokens.build(
+              scopes: ['api'],
+              name: 'forge-mirror-e2e',
+              expires_at: 365.days.from_now)
+            t.set_token('${GITLAB_TOKEN}')
+            t.save!
+            puts 'seeded'
+          "
+          # Prove it works before blaming the mirror for a 401.
+          curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${GITLAB}/api/v4/version"
+          echo
 
       - name: Build
         run: go build -o forge-mirror .
@@ -162,4 +205,4 @@ jobs:
 
       - name: GitLab logs
         if: failure()
-        run: docker logs --tail 200 gitlab
+        run: docker exec gitlab gitlab-ctl status || true

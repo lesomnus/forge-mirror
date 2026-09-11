@@ -106,16 +106,18 @@ notice. So there is an end-to-end test:
   holds the input — an open pull request whose branch still exists, a merged one
   whose branch is gone, a closed issue, comments, an empty body, and a body that
   quotes a marker.
-- `.github/workflows/testbed.yaml` bakes a GitLab with a known token into
-  `ghcr.io/lesomnus/forge-mirror-testbed`. Not for speed: a GitLab that has just
-  come up has no API token, and making one per run is another minute of waiting
-  and another thing that fails for reasons unrelated to the code.
-- `.github/workflows/e2e.yaml` mirrors the fixtures into it, checks what landed
-  and what kind it landed as, **then does it again and requires that nothing was
-  created.**
+- `.github/workflows/e2e.yaml` starts a stock GitLab, seeds a token, mirrors the
+  fixtures into it, checks what landed and what kind it landed as, **then does
+  it again and requires that nothing was created.**
 
-Not on every push: GitLab wants a few minutes and a few gigabytes even
-pre-baked.
+Baking a pre-seeded GitLab image was tried and abandoned. The image declares
+`/etc/gitlab`, `/var/log/gitlab` and `/var/opt/gitlab` as volumes, and
+`docker commit` does not capture volume contents — so the database holding the
+seeded token is precisely the part that is not saved. A cold boot is about three
+minutes and seeding another forty seconds, which is a fine price for one less
+image, one less workflow and one less registry to depend on.
+
+Not on every push all the same: four minutes and a few gigabytes is not free.
 
 ## Status
 
