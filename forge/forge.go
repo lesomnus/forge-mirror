@@ -99,5 +99,9 @@ type Ref struct {
 	Kind Kind
 
 	// ID is the target's own number for it — GitLab's iid, for instance.
-	ID int
+	//
+	// Wider than the source's Number on purpose: this is whatever the target
+	// chose, and targets do not agree on the width. Number is the source's and
+	// stays as the source gives it.
+	ID int64
 }
