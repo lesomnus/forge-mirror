@@ -1,0 +1,158 @@
+# Mirrors lesomnus/forge-mirror-test into a GitLab this job starts, then does it
+# again.
+#
+# The second run is the point. Everything else here could be checked with fakes,
+# and is; what cannot be is whether a real GitLab hands back the same issue when
+# it is asked by marker, and therefore whether an hourly job quietly fills the
+# target with duplicates. Nobody watches a disaster-recovery copy closely enough
+# to notice that happening.
+#
+# Not on every push: GitLab wants a few minutes and a few gigabytes even
+# pre-baked. On a schedule, on demand, and when the code that talks to a forge
+# changes.
+name: e2e
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "17 4 * * *"
+  pull_request:
+    paths:
+      - "forge/**"
+      - "mirror/**"
+      - ".github/workflows/e2e.yaml"
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  GITLAB: http://localhost:8080
+  # Only valid against the throwaway container started below. See testbed.yaml.
+  GITLAB_TOKEN: glpat-forgemirrore2etoken
+  FIXTURE_OWNER: lesomnus
+  FIXTURE_REPO: forge-mirror-test
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Start the testbed
+        run: |
+          set -eu
+          echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+          docker run -d --name gitlab --shm-size 256m -p 8080:8080 \
+            ghcr.io/lesomnus/forge-mirror-testbed:latest
+
+          for i in $(seq 1 40); do
+            if curl -fsS "${GITLAB}/-/health" >/dev/null 2>&1; then
+              echo "healthy after ${i} tries"; exit 0
+            fi
+            sleep 15
+          done
+          echo "testbed did not come up" >&2
+          docker logs --tail 50 gitlab >&2
+          exit 1
+
+      - name: Build
+        run: go build -o forge-mirror .
+
+      - name: Configure
+        run: |
+          cat > e2e.yaml <<YAML
+          source:
+            token: "\${env:GH_TOKEN}"
+            owner: ${FIXTURE_OWNER}
+            repos: [${FIXTURE_REPO}]
+          target:
+            token: "\${env:GL_TOKEN}"
+            baseUrl: ${GITLAB}
+            group: ${FIXTURE_OWNER}
+          YAML
+
+      - name: First run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GL_TOKEN: ${{ env.GITLAB_TOKEN }}
+        run: ./forge-mirror --config e2e.yaml mirror
+
+      - name: What landed
+        run: |
+          set -eu
+          p="${FIXTURE_OWNER}%2F${FIXTURE_REPO}"
+          curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "${GITLAB}/api/v4/projects/${p}/issues?per_page=100&state=all" > issues.json
+          curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "${GITLAB}/api/v4/projects/${p}/merge_requests?per_page=100&state=all" > mrs.json
+
+          echo "issues: $(jq length issues.json)  merge requests: $(jq length mrs.json)"
+          jq -r '.[] | "  issue  !\(.iid) [\(.state)] \(.title)"' issues.json
+          jq -r '.[] | "  mr     !\(.iid) [\(.state)] \(.title)"' mrs.json
+
+      - name: The fixtures arrived as the right kind
+        run: |
+          set -eu
+          fail() { echo "FAIL: $*" >&2; exit 1; }
+
+          # 5 issues + 1 merged pull request that becomes an issue.
+          [ "$(jq length issues.json)" = "6" ] || fail "expected 6 issues, got $(jq length issues.json)"
+          # The open pull request, whose branch still exists.
+          [ "$(jq length mrs.json)" = "1" ] || fail "expected 1 merge request, got $(jq length mrs.json)"
+
+          jq -e '.[] | select(.title == "Add merged.txt")' issues.json >/dev/null \
+            || fail "the merged pull request should be an issue: its branch is gone"
+          jq -e '.[] | select(.title == "Add open.txt")' mrs.json >/dev/null \
+            || fail "the open pull request should be a merge request"
+
+          jq -e '.[] | select(.title == "Typo in the calibration guide") | select(.state == "closed")' issues.json >/dev/null \
+            || fail "a closed issue should arrive closed"
+
+          # The body that quotes a marker must end up with exactly one: ours.
+          n=$(jq -r '.[] | select(.title == "Quoting a mirrored issue") | .description' issues.json \
+                | grep -c 'forge-mirror-origin:' || true)
+          [ "$n" = "1" ] || fail "expected exactly one marker in the quoting issue, got ${n}"
+
+          echo "OK"
+
+      - name: Comments came across
+        run: |
+          set -eu
+          p="${FIXTURE_OWNER}%2F${FIXTURE_REPO}"
+          iid=$(jq -r '.[] | select(.title == "Camera drops frames above 30fps") | .iid' issues.json)
+          n=$(curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                "${GITLAB}/api/v4/projects/${p}/issues/${iid}/notes?per_page=100" | jq length)
+          [ "$n" = "2" ] || { echo "FAIL: expected 2 comments, got ${n}" >&2; exit 1; }
+          echo "OK"
+
+      # The assertion this whole job exists for.
+      - name: Second run creates nothing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GL_TOKEN: ${{ env.GITLAB_TOKEN }}
+        run: |
+          set -eu
+          ./forge-mirror --config e2e.yaml mirror | tee second.txt
+          grep -q "created=0" second.txt \
+            || { echo "FAIL: a second run over unchanged input created something" >&2; exit 1; }
+
+      - name: Nothing was duplicated
+        run: |
+          set -eu
+          p="${FIXTURE_OWNER}%2F${FIXTURE_REPO}"
+          i=$(curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                "${GITLAB}/api/v4/projects/${p}/issues?per_page=100&state=all" | jq length)
+          m=$(curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                "${GITLAB}/api/v4/projects/${p}/merge_requests?per_page=100&state=all" | jq length)
+          [ "$i" = "6" ] && [ "$m" = "1" ] \
+            || { echo "FAIL: counts changed on the second run: issues=${i} mrs=${m}" >&2; exit 1; }
+          echo "OK"
+
+      - name: GitLab logs
+        if: failure()
+        run: docker logs --tail 200 gitlab

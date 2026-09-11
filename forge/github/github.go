@@ -3,6 +3,8 @@ package github
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 	"time"
 
@@ -43,6 +45,18 @@ func NewSource(o Options) (*Source, error) {
 func (s *Source) Name() string { return "github" }
 
 func (s *Source) Repos(ctx context.Context) ([]forge.Repo, error) {
+	// Named repositories are taken as given. Asking the forge to list an
+	// owner's repositories only to throw most of the answer away costs round
+	// trips, and it needs a permission that reading two named repositories does
+	// not.
+	if len(s.repos) > 0 {
+		rs := make([]forge.Repo, 0, len(s.repos))
+		for _, name := range s.repos {
+			rs = append(rs, forge.Repo{Owner: s.owner, Name: name})
+		}
+		return rs, nil
+	}
+
 	// Paging stops on an empty **page**, not on an empty filtered result, so
 	// archived repositories come along too. A copy that quietly leaves out
 	// history is not the copy this is for.
@@ -54,14 +68,16 @@ func (s *Source) Repos(ctx context.Context) ([]forge.Repo, error) {
 	for {
 		page, res, err := s.c.Repositories.ListByOrg(ctx, s.owner, opt)
 		if err != nil {
+			// An owner can be a person rather than an organisation, and the
+			// organisation listing answers 404 for one. The two are told apart
+			// by asking, because there is no way to know from the name.
+			if isNotFound(err) && opt.Page == 0 {
+				return s.reposOfUser(ctx)
+			}
 			return nil, z.Err(err, "list repositories")
 		}
 		for _, r := range page {
-			name := r.GetName()
-			if !s.selects(name) {
-				continue
-			}
-			rs = append(rs, forge.Repo{Owner: s.owner, Name: name})
+			rs = append(rs, forge.Repo{Owner: s.owner, Name: r.GetName()})
 		}
 		if res.NextPage == 0 {
 			break
@@ -72,17 +88,37 @@ func (s *Source) Repos(ctx context.Context) ([]forge.Repo, error) {
 	return rs, nil
 }
 
-func (s *Source) selects(name string) bool {
-	if len(s.repos) == 0 {
-		return true
+func (s *Source) reposOfUser(ctx context.Context) ([]forge.Repo, error) {
+	opt := &github.RepositoryListByUserOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
 	}
-	for _, r := range s.repos {
-		if r == name {
-			return true
+
+	var rs []forge.Repo
+	for {
+		page, res, err := s.c.Repositories.ListByUser(ctx, s.owner, opt)
+		if err != nil {
+			return nil, z.Err(err, "list repositories of user")
 		}
+		for _, r := range page {
+			rs = append(rs, forge.Repo{Owner: s.owner, Name: r.GetName()})
+		}
+		if res.NextPage == 0 {
+			break
+		}
+		opt.ListOptions.Page = res.NextPage
+	}
+
+	return rs, nil
+}
+
+func isNotFound(err error) bool {
+	var e *github.ErrorResponse
+	if errors.As(err, &e) && e.Response != nil {
+		return e.Response.StatusCode == http.StatusNotFound
 	}
 	return false
 }
+
 
 func (s *Source) Issues(ctx context.Context, repo forge.Repo, since time.Time) ([]forge.Issue, error) {
 	// GitHub returns pull requests from the issues endpoint as well: they share

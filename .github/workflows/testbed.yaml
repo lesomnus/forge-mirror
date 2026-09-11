@@ -1,0 +1,98 @@
+# Bakes the GitLab the end-to-end test runs against.
+#
+# Not built with a Dockerfile. Omnibus converges by *starting* services, and a
+# build step has no process supervision to start them under; the data directory
+# baked at build time then fights the entrypoint's own reconfigure at run time.
+# Running it, seeding it, and committing the container is the way that works.
+#
+# Worth doing at all because of the token, not the speed. A GitLab that has just
+# come up has no API token, so every test run would have to make one with
+# `gitlab-rails runner` — another minute of waiting and another thing that can
+# fail for reasons that have nothing to do with the code under test. A test
+# nobody trusts is worse than no test.
+name: testbed
+
+on:
+  workflow_dispatch:
+    inputs:
+      gitlab_version:
+        description: GitLab CE version to bake
+        default: "19.3.1-ce.0"
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/lesomnus/forge-mirror-testbed
+
+jobs:
+  bake:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start GitLab
+        env:
+          VERSION: ${{ inputs.gitlab_version }}
+        run: |
+          set -eu
+          # Small on purpose: puma in single mode and one sidekiq worker is
+          # enough to answer an API, and the difference decides whether this
+          # fits on a hosted runner at all.
+          docker run -d --name gitlab \
+            --shm-size 256m \
+            -p 8080:8080 \
+            -e GITLAB_OMNIBUS_CONFIG="
+              external_url 'http://localhost:8080';
+              puma['worker_processes'] = 0;
+              sidekiq['max_concurrency'] = 2;
+              postgresql['shared_buffers'] = '128MB';
+              prometheus_monitoring['enable'] = false;
+              gitlab_rails['gitlab_shell_ssh_port'] = 2222;
+            " \
+            "gitlab/gitlab-ce:${VERSION}"
+
+      - name: Wait for it
+        run: |
+          set -eu
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/-/health >/dev/null 2>&1; then
+              echo "healthy after ${i} tries"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "GitLab did not come up" >&2
+          docker logs --tail 50 gitlab >&2
+          exit 1
+
+      - name: Seed a known token
+        run: |
+          set -eu
+          # The token is fixed and public on purpose. It is only ever valid
+          # against a container this workflow just started and throws away;
+          # there is nothing behind it. Keeping it fixed is what lets the test
+          # start working immediately instead of parsing one out of a log.
+          docker exec gitlab gitlab-rails runner "
+            u = User.find_by_username('root')
+            u.update!(admin: true)
+            t = u.personal_access_tokens.build(
+              scopes: ['api'],
+              name: 'forge-mirror-e2e',
+              expires_at: 365.days.from_now)
+            t.set_token('glpat-forgemirrore2etoken')
+            t.save!
+            puts 'seeded'
+          "
+
+      - name: Commit and push
+        run: |
+          set -eu
+          echo '${{ secrets.GITHUB_TOKEN }}' | docker login ghcr.io -u '${{ github.actor }}' --password-stdin
+
+          docker stop gitlab
+          docker commit gitlab "${IMAGE}:${{ inputs.gitlab_version }}"
+          docker tag "${IMAGE}:${{ inputs.gitlab_version }}" "${IMAGE}:latest"
+          docker push "${IMAGE}:${{ inputs.gitlab_version }}"
+          docker push "${IMAGE}:latest"

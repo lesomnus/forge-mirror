@@ -79,8 +79,30 @@ func (t *Target) groupIDOf(ctx context.Context) (int64, error) {
 	}
 
 	g, _, err := t.c.Groups.GetGroup(t.group, nil, gl.WithContext(ctx))
-	if err != nil {
+	if err == nil {
+		t.groupID = g.ID
+		return g.ID, nil
+	}
+	if !isNotFound(err) {
 		return 0, z.Err(err, "get group")
+	}
+
+	// The group is the namespace everything mirrored lives in, and on a target
+	// that has never been mirrored into there is none. Making it is part of
+	// being able to run against an empty forge — which is exactly the state the
+	// target is in on the day it is needed, and the state a test starts from.
+	g, _, err = t.c.Groups.CreateGroup(&gl.CreateGroupOptions{
+		Name:       gl.Ptr(t.group),
+		Path:       gl.Ptr(t.group),
+		Visibility: gl.Ptr(gl.PrivateVisibility),
+	}, gl.WithContext(ctx))
+	if err != nil {
+		// Lost a race with another run.
+		if g2, _, e := t.c.Groups.GetGroup(t.group, nil, gl.WithContext(ctx)); e == nil {
+			t.groupID = g2.ID
+			return g2.ID, nil
+		}
+		return 0, z.Err(err, "create group")
 	}
 
 	t.groupID = g.ID

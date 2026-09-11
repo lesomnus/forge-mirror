@@ -91,10 +91,44 @@ Named rather than hidden, because these are the places a second forge will hurt:
 - **Rate limits.** Primary, secondary and search limits differ per forge, so the
   retry strategy belongs to the client, not to the caller.
 
+## Tests
+
+The decisions are tested against fakes, which is most of them: what to create,
+what to rewrite, what to leave alone, and — the one the program rests on —
+that a second run over unchanged input creates nothing.
+
+What fakes cannot answer is whether a **real** forge hands back the same issue
+when asked by marker. If it does not, an hourly job fills the target with
+duplicates, and nobody watches a disaster-recovery copy closely enough to
+notice. So there is an end-to-end test:
+
+- [`lesomnus/forge-mirror-test`](https://github.com/lesomnus/forge-mirror-test)
+  holds the input — an open pull request whose branch still exists, a merged one
+  whose branch is gone, a closed issue, comments, an empty body, and a body that
+  quotes a marker.
+- `.github/workflows/testbed.yaml` bakes a GitLab with a known token into
+  `ghcr.io/lesomnus/forge-mirror-testbed`. Not for speed: a GitLab that has just
+  come up has no API token, and making one per run is another minute of waiting
+  and another thing that fails for reasons unrelated to the code.
+- `.github/workflows/e2e.yaml` mirrors the fixtures into it, checks what landed
+  and what kind it landed as, **then does it again and requires that nothing was
+  created.**
+
+Not on every push: GitLab wants a few minutes and a few gigabytes even
+pre-baked.
+
 ## Status
 
-Early. The domain model, the marker and the decisions around them are
-implemented and tested; the forge clients are in progress.
+Early, and honest about it:
+
+- `mirror` works end to end — GitHub source, GitLab target, incremental,
+  idempotent.
+- `restore` (target → source, after an outage) is designed but not written.
+- The incremental cursor is not persisted yet. `since` bounds each run instead,
+  which costs round trips but not correctness, because every write is
+  idempotent.
+- Attachments are not carried. Issue bodies referencing files on the source
+  will break when the source does — the thing this is meant to survive.
 
 ## License
 
