@@ -54,17 +54,26 @@ jobs:
             "gitlab/gitlab-ce:${VERSION}"
 
       - name: Wait for it
+        # A cold Omnibus boot on a hosted runner takes longer than it looks like
+        # it should: postgres and sidekiq come up minutes before puma does, so
+        # the box appears busy while the thing being waited for is not there
+        # yet. Measured at over 16 minutes, so the limit is well past that —
+        # this workflow runs by hand, and waiting beats a flaky bake.
         run: |
           set -eu
-          for i in $(seq 1 60); do
+          for i in $(seq 1 100); do
             if curl -fsS http://localhost:8080/-/health >/dev/null 2>&1; then
-              echo "healthy after ${i} tries"
+              echo "healthy after $((i * 15))s"
               exit 0
             fi
+            # `gitlab-ctl status` says which services are up, which is the
+            # question being asked. The logs are JSON and answer it only by
+            # implication.
+            [ $((i % 8)) -ne 0 ] || docker exec gitlab gitlab-ctl status 2>&1 | sed 's/^/  /' || true
             sleep 15
           done
           echo "GitLab did not come up" >&2
-          docker logs --tail 50 gitlab >&2
+          docker exec gitlab gitlab-ctl status >&2 || true
           exit 1
 
       - name: Seed a known token

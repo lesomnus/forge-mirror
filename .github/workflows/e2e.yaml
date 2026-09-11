@@ -50,14 +50,17 @@ jobs:
           docker run -d --name gitlab --shm-size 256m -p 8080:8080 \
             ghcr.io/lesomnus/forge-mirror-testbed:latest
 
-          for i in $(seq 1 40); do
+          # Faster than a cold boot because the baked image is already
+          # configured, but still not fast: Omnibus starts every service again.
+          for i in $(seq 1 60); do
             if curl -fsS "${GITLAB}/-/health" >/dev/null 2>&1; then
-              echo "healthy after ${i} tries"; exit 0
+              echo "healthy after $((i * 10))s"; exit 0
             fi
-            sleep 15
+            [ $((i % 6)) -ne 0 ] || docker exec gitlab gitlab-ctl status 2>&1 | sed 's/^/  /' || true
+            sleep 10
           done
           echo "testbed did not come up" >&2
-          docker logs --tail 50 gitlab >&2
+          docker exec gitlab gitlab-ctl status >&2 || true
           exit 1
 
       - name: Build
