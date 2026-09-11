@@ -32,15 +32,18 @@ dryRun: false
 # Telemetry. Nothing configured means nothing is emitted, which is right for a
 # workstation and wrong for the cluster.
 #
-# In the cluster this pushes over OTLP rather than being scraped: this is a
-# CronJob, so it is gone before a scrape could reach it.
+# Push rather than scrape: this is a batch job, so it has exited before a
+# scrape could reach it.
 #
 # otel:
 #   exporters:
-#     otlp/gateway:
+#     otlp:
+#       protocol: grpc
 #       endpoint: otel-gateway.monitoring.svc.cluster.local:4317
+#       tls:
+#         insecure: true
 #   providers:
 #     meter:
-#       exporters: [otlp/gateway]
+#       exporters: [otlp]
 #     tracer:
-#       exporters: [otlp/gateway]
+#       exporters: [otlp]

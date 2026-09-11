@@ -67,9 +67,17 @@ func NewCmdMirror() *xli.Command {
 				},
 			}
 
+			started := time.Now()
 			r, err := m.Run(ctx, since)
 			if err != nil {
 				return err
+			}
+
+			if err := observe(ctx, r, time.Since(started)); err != nil {
+				// Telemetry failing is not the run failing. The mirror already
+				// did its work; refusing to report success because a counter
+				// could not be created would be the tail wagging the dog.
+				cmd.Println(fmt.Sprintf("[mirror] telemetry: %v", err))
 			}
 
 			cmd.Println(fmt.Sprintf(
