@@ -68,7 +68,12 @@ jobs:
         run: |
           set -eu
           for i in $(seq 1 60); do
-            if curl -fsS http://localhost:8080/-/health >/dev/null 2>&1; then
+            # From **inside** the container. GitLab restricts `/-/health` to
+            # `monitoring_whitelist`, which is 127.0.0.0/8 by default, so the
+            # same request from the runner is refused however healthy GitLab is.
+            # The API this test actually uses is not restricted that way, so
+            # only the probe needs to be in here.
+            if docker exec gitlab curl -fsS http://127.0.0.1:8080/-/health >/dev/null 2>&1; then
               echo "healthy after $((i * 10))s"
               exit 0
             fi

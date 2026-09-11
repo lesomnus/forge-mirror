@@ -53,7 +53,11 @@ jobs:
           # Faster than a cold boot because the baked image is already
           # configured, but still not fast: Omnibus starts every service again.
           for i in $(seq 1 60); do
-            if curl -fsS "${GITLAB}/-/health" >/dev/null 2>&1; then
+            # Inside the container: `/-/health` is limited to
+            # `monitoring_whitelist` (127.0.0.0/8), so asking from out here is
+            # refused no matter how healthy it is. The API the mirror uses has
+            # no such limit.
+            if docker exec gitlab curl -fsS http://127.0.0.1:8080/-/health >/dev/null 2>&1; then
               echo "healthy after $((i * 10))s"; exit 0
             fi
             [ $((i % 6)) -ne 0 ] || docker exec gitlab gitlab-ctl status 2>&1 | sed 's/^/  /' || true
