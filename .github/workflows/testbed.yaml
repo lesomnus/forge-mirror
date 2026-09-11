@@ -40,11 +40,18 @@ jobs:
           # Small on purpose: puma in single mode and one sidekiq worker is
           # enough to answer an API, and the difference decides whether this
           # fits on a hosted runner at all.
+          #
+          # ⚠️ `puma['port']` has to move off 8080. Omnibus defaults puma to
+          # 127.0.0.1:8080, and `external_url` with a port puts **nginx** on the
+          # same one. nginx wins the race, puma dies with EADDRINUSE, and runit
+          # restarts it forever — from outside it looks like a slow boot, since
+          # nginx and workhorse are up and answering 502 the whole time.
           docker run -d --name gitlab \
             --shm-size 256m \
             -p 8080:8080 \
             -e GITLAB_OMNIBUS_CONFIG="
               external_url 'http://localhost:8080';
+              puma['port'] = 8081;
               puma['worker_processes'] = 0;
               sidekiq['max_concurrency'] = 2;
               postgresql['shared_buffers'] = '128MB';
@@ -54,26 +61,27 @@ jobs:
             "gitlab/gitlab-ce:${VERSION}"
 
       - name: Wait for it
-        # A cold Omnibus boot on a hosted runner takes longer than it looks like
-        # it should: postgres and sidekiq come up minutes before puma does, so
-        # the box appears busy while the thing being waited for is not there
-        # yet. Measured at over 16 minutes, so the limit is well past that —
-        # this workflow runs by hand, and waiting beats a flaky bake.
+        # A cold boot runs the migrations, so minutes rather than seconds — but
+        # minutes, not tens of them. A limit far past the real time only turns a
+        # crash into a long wait, which is how the port collision above went
+        # unnoticed for two runs.
         run: |
           set -eu
-          for i in $(seq 1 100); do
+          for i in $(seq 1 60); do
             if curl -fsS http://localhost:8080/-/health >/dev/null 2>&1; then
-              echo "healthy after $((i * 15))s"
+              echo "healthy after $((i * 10))s"
               exit 0
             fi
-            # `gitlab-ctl status` says which services are up, which is the
-            # question being asked. The logs are JSON and answer it only by
+            # `gitlab-ctl status` answers the question being asked — which
+            # services are up — and a service whose pid changes between samples
+            # is restarting, not starting. The logs are JSON and say it only by
             # implication.
-            [ $((i % 8)) -ne 0 ] || docker exec gitlab gitlab-ctl status 2>&1 | sed 's/^/  /' || true
-            sleep 15
+            [ $((i % 6)) -ne 0 ] || docker exec gitlab gitlab-ctl status 2>&1 | sed 's/^/  /' || true
+            sleep 10
           done
           echo "GitLab did not come up" >&2
           docker exec gitlab gitlab-ctl status >&2 || true
+          docker exec gitlab tail -40 /var/log/gitlab/puma/current >&2 || true
           exit 1
 
       - name: Seed a known token
