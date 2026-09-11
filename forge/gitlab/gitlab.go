@@ -306,14 +306,18 @@ func stateEvent(s forge.State, closed string, open string) *string {
 	return gl.Ptr(open)
 }
 
-func isNotFound(err error) bool { return hasStatus(err, http.StatusNotFound) }
+// 404 is the one status this client does not report as an *ErrorResponse: it
+// returns the sentinel gl.ErrNotFound instead. Matching on the response code
+// therefore never sees a 404, and "not there yet" — the normal case on a target
+// that has never been mirrored into — comes back as a hard failure.
+func isNotFound(err error) bool { return errors.Is(err, gl.ErrNotFound) }
 
 func isConflict(err error) bool { return hasStatus(err, http.StatusConflict) }
 
 func hasStatus(err error, code int) bool {
 	var e *gl.ErrorResponse
-	if errors.As(err, &e) && e.Response != nil {
-		return e.Response.StatusCode == code
+	if errors.As(err, &e) {
+		return e.HasStatusCode(code)
 	}
 	return false
 }
