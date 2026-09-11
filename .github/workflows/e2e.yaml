@@ -110,6 +110,39 @@ jobs:
           curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" "${GITLAB}/api/v4/version"
           echo
 
+      - name: Stand in for the repository mirror
+        # This program carries no git. In production a repository mirror puts
+        # the branches there and this one adds the issues on top, so the test
+        # has to arrange the same thing or the open pull request has nothing to
+        # be a merge request between.
+        #
+        # It also fixes the order deliberately: code first, then metadata. That
+        # is the order production runs in, and the one where a merge request can
+        # be made at all.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          curl -fsS -X POST -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "${GITLAB}/api/v4/groups" \
+            -d "name=${FIXTURE_OWNER}&path=${FIXTURE_OWNER}&visibility=private" >/dev/null
+          pid=$(curl -fsS -X POST -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "${GITLAB}/api/v4/projects" \
+            -d "name=${FIXTURE_REPO}&path=${FIXTURE_REPO}&namespace_id=$(
+              curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                "${GITLAB}/api/v4/groups/${FIXTURE_OWNER}" | jq -r .id
+            )&visibility=private" | jq -r .id)
+          echo "project ${pid}"
+
+          git clone -q --mirror \
+            "https://x-access-token:${GH_TOKEN}@github.com/${FIXTURE_OWNER}/${FIXTURE_REPO}.git" fixture.git
+          git --git-dir=fixture.git push --quiet --mirror \
+            "http://oauth2:${GITLAB_TOKEN}@localhost:8080/${FIXTURE_OWNER}/${FIXTURE_REPO}.git"
+
+          curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "${GITLAB}/api/v4/projects/${FIXTURE_OWNER}%2F${FIXTURE_REPO}/repository/branches" \
+            | jq -r '.[] | "  branch \(.name)"'
+
       - name: Build
         run: go build -o forge-mirror .
 

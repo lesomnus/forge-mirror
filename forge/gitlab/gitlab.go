@@ -113,6 +113,23 @@ func (t *Target) path(repo forge.Repo) string {
 	return t.group + "/" + repo.Name
 }
 
+// hasBranches reports whether both branches are in the target already.
+//
+// Asked before creating a merge request rather than inferred from the failure:
+// the failure is a 400 whose only distinguishing mark is English prose in a
+// nested JSON body, and reading that would break the day GitLab rewords it.
+func (t *Target) hasBranches(ctx context.Context, pid string, names ...string) bool {
+	for _, name := range names {
+		if name == "" {
+			return false
+		}
+		if _, _, err := t.c.Branches.GetBranch(pid, name, gl.WithContext(ctx)); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func (t *Target) project(ctx context.Context, repo forge.Repo) (*gl.Project, error) {
 	p, _, err := t.c.Projects.GetProject(t.path(repo), nil, gl.WithContext(ctx))
 	if err != nil {
@@ -172,7 +189,17 @@ func (t *Target) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o f
 	pid := t.path(repo)
 	body := forge.Render(i, o)
 
-	if forge.TargetKind(i) == forge.KindPull {
+	// A merge request needs both branches to be here, and this program does not
+	// carry git — a repository mirror does, separately. So the branches are
+	// present only if that mirror has already pushed them, which is not
+	// something this one can assume: it may run first, or against a repository
+	// nobody mirrors the code of.
+	//
+	// When they are missing the pull request is mirrored as an issue, the same
+	// form a closed one takes. The marker still records that it was a pull
+	// request, so nothing is lost but the link between the two branches — and
+	// an issue holding the discussion beats failing the whole repository.
+	if forge.TargetKind(i) == forge.KindPull && t.hasBranches(ctx, pid, i.Head, i.Base) {
 		m, _, err := t.c.MergeRequests.CreateMergeRequest(pid, &gl.CreateMergeRequestOptions{
 			Title:        gl.Ptr(i.Title),
 			Description:  gl.Ptr(body),
