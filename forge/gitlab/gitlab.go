@@ -204,6 +204,11 @@ func (t *Target) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o f
 	return ref, nil
 }
 
+// Returning a wrap of a possibly-nil error needs `z.ErrIf`, not `z.Err`:
+// `z.Err` wraps unconditionally, so on success it hands back a non-nil error
+// reading `update issue: %!w(<nil>)` and a run that did its work reports
+// failure. Guarded call sites can keep using `z.Err`, since they have already
+// established the error is real.
 func (t *Target) Update(ctx context.Context, repo forge.Repo, ref forge.Ref, i forge.Issue, o forge.Origin) error {
 	pid := t.path(repo)
 	body := forge.Render(i, o)
@@ -215,7 +220,7 @@ func (t *Target) Update(ctx context.Context, repo forge.Repo, ref forge.Ref, i f
 			Labels:      labelsOf(i),
 			StateEvent:  stateEvent(i.State, "close", "reopen"),
 		}, gl.WithContext(ctx))
-		return z.Err(err, "update merge request")
+		return z.ErrIf(err, "update merge request")
 	}
 
 	_, _, err := t.c.Issues.UpdateIssue(pid, ref.ID, &gl.UpdateIssueOptions{
@@ -224,7 +229,7 @@ func (t *Target) Update(ctx context.Context, repo forge.Repo, ref forge.Ref, i f
 		Labels:      labelsOf(i),
 		StateEvent:  stateEvent(i.State, "close", "reopen"),
 	}, gl.WithContext(ctx))
-	return z.Err(err, "update issue")
+	return z.ErrIf(err, "update issue")
 }
 
 // EnsureLabels creates labels that are not there yet.
@@ -283,12 +288,12 @@ func (t *Target) Comment(ctx context.Context, repo forge.Repo, ref forge.Ref, bo
 	if ref.Kind == forge.KindPull {
 		_, _, err := t.c.Notes.CreateMergeRequestNote(pid, ref.ID,
 			&gl.CreateMergeRequestNoteOptions{Body: gl.Ptr(body)}, gl.WithContext(ctx))
-		return z.Err(err, "create merge request note")
+		return z.ErrIf(err, "create merge request note")
 	}
 
 	_, _, err := t.c.Notes.CreateIssueNote(pid, ref.ID,
 		&gl.CreateIssueNoteOptions{Body: gl.Ptr(body)}, gl.WithContext(ctx))
-	return z.Err(err, "create issue note")
+	return z.ErrIf(err, "create issue note")
 }
 
 func labelsOf(i forge.Issue) *gl.LabelOptions {
