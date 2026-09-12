@@ -3,7 +3,6 @@ package mirror_test
 import (
 	"context"
 	"errors"
-	"strings"
 	"time"
 
 	"github.com/lesomnus/forge-mirror/forge"
@@ -88,14 +87,14 @@ func (t *fakeTarget) EnsureRepo(ctx context.Context, repo forge.Repo) (bool, err
 	return true, nil
 }
 
-func (t *fakeTarget) FindByOrigin(ctx context.Context, repo forge.Repo, o forge.Origin) (forge.Ref, bool, error) {
-	marker := forge.Marker(o)
+func (t *fakeTarget) Origins(ctx context.Context, repo forge.Repo) (map[forge.Origin]forge.Ref, error) {
+	out := map[forge.Origin]forge.Ref{}
 	for id, s := range t.issues {
-		if strings.Contains(s.body, marker) {
-			return forge.Ref{Kind: s.kind, ID: id}, true, nil
+		if o, ok := forge.ParseOrigin(s.body); ok {
+			out[o] = forge.Ref{Kind: s.kind, ID: id}
 		}
 	}
-	return forge.Ref{}, false, nil
+	return out, nil
 }
 
 func (t *fakeTarget) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o forge.Origin) (forge.Ref, error) {
