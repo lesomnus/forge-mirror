@@ -16,6 +16,16 @@ type Target struct {
 	group string
 
 	groupID int64
+
+	// milestones is what the target calls the milestones of a repository, by
+	// the title the source knows them under, for repositories this run has
+	// already asked about.
+	//
+	// A milestone cannot be named on a write the way a label can — GitLab takes
+	// an id — so it has to be looked up, and looking it up once for a repository
+	// beats once for every issue in it. Run-scoped: the program is a job that
+	// exits, and a stale id would point at a milestone somebody renamed.
+	milestones map[string]map[string]int64
 }
 
 type Options struct {
@@ -219,6 +229,11 @@ func (t *Target) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o f
 	pid := t.path(repo)
 	body := forge.Render(i, o)
 
+	milestone, err := t.milestoneID(ctx, repo, i.Milestone)
+	if err != nil {
+		return forge.Ref{}, err
+	}
+
 	// An open pull request becomes a merge request when the target can hold one,
 	// and an issue when it cannot. Two things stop it, and both are ordinary
 	// rather than exceptional:
@@ -244,6 +259,7 @@ func (t *Target) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o f
 			SourceBranch: gl.Ptr(i.Head),
 			TargetBranch: gl.Ptr(i.Base),
 			Labels:       labelsOf(i),
+			MilestoneID:  milestone,
 		}, gl.WithContext(ctx))
 		switch {
 		case err == nil:
@@ -259,6 +275,7 @@ func (t *Target) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o f
 		Title:       gl.Ptr(i.Title),
 		Description: gl.Ptr(body),
 		Labels:      labelsOf(i),
+		MilestoneID: milestone,
 	}, gl.WithContext(ctx))
 	if err != nil {
 		return forge.Ref{}, z.Err(err, "create issue")
@@ -282,23 +299,109 @@ func (t *Target) Update(ctx context.Context, repo forge.Repo, ref forge.Ref, i f
 	pid := t.path(repo)
 	body := forge.Render(i, o)
 
+	milestone, err := t.milestoneID(ctx, repo, i.Milestone)
+	if err != nil {
+		return err
+	}
+
 	if ref.Kind == forge.KindPull {
 		_, _, err := t.c.MergeRequests.UpdateMergeRequest(pid, ref.ID, &gl.UpdateMergeRequestOptions{
 			Title:       gl.Ptr(i.Title),
 			Description: gl.Ptr(body),
 			Labels:      labelsOf(i),
+			MilestoneID: milestone,
 			StateEvent:  stateEvent(i.State, "close", "reopen"),
 		}, gl.WithContext(ctx))
 		return z.ErrIf(err, "update merge request")
 	}
 
-	_, _, err := t.c.Issues.UpdateIssue(pid, ref.ID, &gl.UpdateIssueOptions{
+	_, _, err = t.c.Issues.UpdateIssue(pid, ref.ID, &gl.UpdateIssueOptions{
 		Title:       gl.Ptr(i.Title),
 		Description: gl.Ptr(body),
 		Labels:      labelsOf(i),
+		MilestoneID: milestone,
 		StateEvent:  stateEvent(i.State, "close", "reopen"),
 	}, gl.WithContext(ctx))
 	return z.ErrIf(err, "update issue")
+}
+
+// milestoneID is what the target calls the milestone titled `title`, making it
+// if it is not there. An empty title, which is most issues, is no milestone and
+// no request.
+func (t *Target) milestoneID(ctx context.Context, repo forge.Repo, title string) (*int64, error) {
+	if title == "" {
+		return nil, nil
+	}
+
+	pid := t.path(repo)
+	byTitle, ok := t.milestones[pid]
+	if !ok {
+		var err error
+		if byTitle, err = t.listMilestones(ctx, pid); err != nil {
+			return nil, err
+		}
+		if t.milestones == nil {
+			t.milestones = map[string]map[string]int64{}
+		}
+		t.milestones[pid] = byTitle
+	}
+	if id, ok := byTitle[title]; ok {
+		return gl.Ptr(id), nil
+	}
+
+	m, _, err := t.c.Milestones.CreateMilestone(pid, &gl.CreateMilestoneOptions{
+		Title: gl.Ptr(title),
+	}, gl.WithContext(ctx))
+	switch {
+	case err == nil:
+		byTitle[title] = m.ID
+		return gl.Ptr(m.ID), nil
+
+	case isConflict(err):
+		// Made since the listing was taken — by an earlier run, or by a person.
+		// Read it back rather than guess at what it was called.
+		fresh, err := t.listMilestones(ctx, pid)
+		if err != nil {
+			return nil, err
+		}
+		t.milestones[pid] = fresh
+		if id, ok := fresh[title]; ok {
+			return gl.Ptr(id), nil
+		}
+		// It answered conflict and then was not there. Nothing sensible is left
+		// to point at, and a milestone is not worth failing the issue over.
+		return nil, nil
+
+	default:
+		return nil, z.Err(err, "create milestone %q", title)
+	}
+}
+
+func (t *Target) listMilestones(ctx context.Context, pid string) (map[string]int64, error) {
+	byTitle := map[string]int64{}
+
+	var page int64 = 1
+	for {
+		ms, res, err := t.c.Milestones.ListMilestones(pid, &gl.ListMilestonesOptions{
+			ListOptions: gl.ListOptions{PerPage: 100, Page: page},
+		}, gl.WithContext(ctx))
+		if err != nil {
+			if isNotFound(err) {
+				// Nothing mirrored into this project yet.
+				return byTitle, nil
+			}
+			return nil, z.Err(err, "list milestones")
+		}
+		for _, m := range ms {
+			byTitle[m.Title] = m.ID
+		}
+		if res.NextPage == 0 {
+			break
+		}
+		page = res.NextPage
+	}
+
+	return byTitle, nil
 }
 
 // EnsureLabels creates labels that are not there yet.
