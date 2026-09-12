@@ -217,13 +217,23 @@ jobs:
 
           # 5 issues + 1 merged pull request that becomes an issue.
           [ "$(jq length issues.json)" = "6" ] || fail "expected 6 issues, got $(jq length issues.json)"
-          # The open pull request, whose branch still exists.
-          [ "$(jq length mrs.json)" = "1" ] || fail "expected 1 merge request, got $(jq length mrs.json)"
+          # Both open pull requests, whose branches still exist.
+          [ "$(jq length mrs.json)" = "2" ] || fail "expected 2 merge requests, got $(jq length mrs.json)"
 
           jq -e '.[] | select(.title == "Add merged.txt")' issues.json >/dev/null \
             || fail "the merged pull request should be an issue: its branch is gone"
           jq -e '.[] | select(.title == "Add open.txt")' mrs.json >/dev/null \
             || fail "the open pull request should be a merge request"
+
+          # Two open pull requests from one branch to different bases. GitLab
+          # takes both: what it refuses is a second one with the same target as
+          # well, and that is the shape that stopped a repository with a 409
+          # once. This locks in the half that is easy to get wrong — a reader
+          # who remembers only "one merge request per source branch" would
+          # expect this to fail, and making the mirror force it into an issue
+          # would lose a merge request that the target was willing to hold.
+          jq -e '.[] | select(.title == "Add open.txt to release")' mrs.json >/dev/null \
+            || fail "a second pull request to a different base should be a merge request"
 
           jq -e '.[] | select(.title == "Typo in the calibration guide") | select(.state == "closed")' issues.json >/dev/null \
             || fail "a closed issue should arrive closed"
@@ -232,6 +242,24 @@ jobs:
           n=$(jq -r '.[] | select(.title == "Quoting a mirrored issue") | .description' issues.json \
                 | grep -c 'forge-mirror-origin:' || true)
           [ "$n" = "1" ] || fail "expected exactly one marker in the quoting issue, got ${n}"
+
+          echo "OK"
+
+      - name: The milestone came across
+        run: |
+          set -eu
+          fail() { echo "FAIL: $*" >&2; exit 1; }
+
+          got=$(jq -r '.[] | select(.title == "Gripper drops payload above 2kg")
+                            | .milestone.title // "none"' issues.json)
+          [ "$got" = "v1" ] || fail "expected milestone v1, got ${got}"
+
+          # And it was made here rather than assumed to exist: the target starts
+          # empty every run.
+          n=$(curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                "${GITLAB}/api/v4/projects/${FIXTURE_OWNER}%2F${FIXTURE_REPO}/milestones" \
+                | jq '[.[] | select(.title == "v1")] | length')
+          [ "$n" = "1" ] || fail "expected exactly one v1 milestone, got ${n}"
 
           echo "OK"
 
@@ -267,7 +295,7 @@ jobs:
                 "${GITLAB}/api/v4/projects/${p}/issues?per_page=100&state=all" | jq length)
           m=$(curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
                 "${GITLAB}/api/v4/projects/${p}/merge_requests?per_page=100&state=all" | jq length)
-          [ "$i" = "6" ] && [ "$m" = "1" ] \
+          [ "$i" = "6" ] && [ "$m" = "2" ] \
             || { echo "FAIL: counts changed on the second run: issues=${i} mrs=${m}" >&2; exit 1; }
           echo "OK"
 
