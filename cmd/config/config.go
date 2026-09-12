@@ -23,6 +23,14 @@ type Config struct {
 	Since  Since `yaml:"since"`
 	DryRun bool  `yaml:"dryRun"`
 
+	// StatePath is the file the cursor is kept in between runs. Empty disables
+	// it, and then every run looks back as far as Since allows.
+	//
+	// What is on it is an optimisation, never the record of what was mirrored:
+	// that is read back out of the target. So this may live on a disk that can
+	// be wiped — losing it costs one expensive run.
+	StatePath string `yaml:"statePath"`
+
 	Otel OtelConfig
 }
 
