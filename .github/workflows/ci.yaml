@@ -10,9 +10,12 @@ on:
       - cmd/**
       - docker-bake.hcl
       - Dockerfile
+      - forge/**
       - go.mod
       - go.sum
       - main.go
+      - mirror/**
+      - scripts/**
   pull_request:
     branches:
       - main
