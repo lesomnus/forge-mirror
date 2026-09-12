@@ -219,16 +219,24 @@ func (t *Target) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o f
 	pid := t.path(repo)
 	body := forge.Render(i, o)
 
-	// A merge request needs both branches to be here, and this program does not
-	// carry git — a repository mirror does, separately. So the branches are
-	// present only if that mirror has already pushed them, which is not
-	// something this one can assume: it may run first, or against a repository
-	// nobody mirrors the code of.
+	// An open pull request becomes a merge request when the target can hold one,
+	// and an issue when it cannot. Two things stop it, and both are ordinary
+	// rather than exceptional:
 	//
-	// When they are missing the pull request is mirrored as an issue, the same
-	// form a closed one takes. The marker still records that it was a pull
-	// request, so nothing is lost but the link between the two branches — and
-	// an issue holding the discussion beats failing the whole repository.
+	//   the branches are not here — this program does not carry git, a
+	//     repository mirror does that separately, and this one may run first or
+	//     against a repository nobody mirrors the code of;
+	//
+	//   the branch already has an open merge request — GitLab allows one per
+	//     source branch, while GitHub allows several pull requests from one
+	//     branch as long as their bases differ, so a source can hold more of
+	//     them than a target can take.
+	//
+	// Either way it is mirrored as an issue, the same form a closed pull request
+	// takes. The marker still records that it was a pull request, so what is
+	// lost is the link between the two branches — and an issue holding the
+	// discussion beats failing the whole repository, which is what the second
+	// case did until it was seen in a first run over a real organisation.
 	if forge.TargetKind(i) == forge.KindPull && t.hasBranches(ctx, pid, i.Head, i.Base) {
 		m, _, err := t.c.MergeRequests.CreateMergeRequest(pid, &gl.CreateMergeRequestOptions{
 			Title:        gl.Ptr(i.Title),
@@ -237,10 +245,14 @@ func (t *Target) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o f
 			TargetBranch: gl.Ptr(i.Base),
 			Labels:       labelsOf(i),
 		}, gl.WithContext(ctx))
-		if err != nil {
+		switch {
+		case err == nil:
+			return forge.Ref{Kind: forge.KindPull, ID: m.IID}, nil
+		case isConflict(err):
+			// Fall through to the issue below.
+		default:
 			return forge.Ref{}, z.Err(err, "create merge request")
 		}
-		return forge.Ref{Kind: forge.KindPull, ID: m.IID}, nil
 	}
 
 	n, _, err := t.c.Issues.CreateIssue(pid, &gl.CreateIssueOptions{
