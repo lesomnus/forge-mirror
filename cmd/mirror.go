@@ -46,14 +46,10 @@ func NewCmdMirror() *xli.Command {
 				return z.Err(err, "target")
 			}
 
-			// `since` bounds the first run rather than being the cursor. The
-			// cursor is what the last successful run recorded; until that is
-			// persisted this is what keeps a first run from deciding to fetch a
-			// decade of issues.
-			var since time.Time
-			if c.Since > 0 {
-				since = time.Now().Add(-c.Since)
-			}
+			// Where the last clean run got to, capped by how far back the
+			// configuration allows this one to look.
+			started := time.Now()
+			since := sinceFor(started, c.Since, readCursor(c.StatePath))
 
 			m := &mirror.Mirror{
 				Source: src,
@@ -67,10 +63,24 @@ func NewCmdMirror() *xli.Command {
 				},
 			}
 
-			started := time.Now()
 			r, err := m.Run(ctx, since)
 			if err != nil {
 				return err
+			}
+
+			// The cursor moves only when every repository succeeded and only
+			// when something was actually written: a run that failed somewhere,
+			// or one that was only pretending, must not let the next one skip
+			// past what it did not copy.
+			//
+			// It records when this run *started*, not when it finished, so
+			// anything changed while it was in flight is looked at again.
+			if r.Failed == 0 && !c.DryRun {
+				if err := writeCursor(c.StatePath, started); err != nil {
+					// The run did its work. Failing to save the optimisation
+					// only costs the next run some reading.
+					cmd.Println(fmt.Sprintf("[mirror] cursor: %v", err))
+				}
 			}
 
 			if err := observe(ctx, r, time.Since(started)); err != nil {
