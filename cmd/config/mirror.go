@@ -44,11 +44,13 @@ func (c SourceConfig) Selects(name string) bool {
 	return false
 }
 
-// Since is how far back to look on each run.
+// Since is the furthest back a run is allowed to look.
 //
-// It is a safety rail, not the incremental cursor: the cursor is whatever the
-// last successful run recorded. This caps the first run — pointing the program
-// at an organisation with a decade of issues and having it decide to fetch all
-// of them is rarely what was meant — and bounds the damage of a lost cursor.
-// Zero means no limit.
+// It is a safety rail rather than the position: the position is the cursor the
+// last clean run recorded (see Config.StatePath), and a run reads from whichever
+// of the two is later. So this caps the first run — pointing the program at an
+// organisation with a decade of issues and having it decide to fetch all of
+// them is rarely what was meant — and it bounds the cost of a lost cursor or of
+// a job whose runs have been failing. Zero means no limit, which is what the
+// pass that has to converge on everything wants.
 type Since = time.Duration
