@@ -7,6 +7,12 @@ import (
 	"github.com/lesomnus/mkot"
 	"github.com/lesomnus/mkot/mkotx"
 	"github.com/lesomnus/mkot/pretty"
+
+	// mkot learns an exporter type from that package's init, so a type the
+	// configuration is allowed to name has to be linked in even when no symbol
+	// of it is used. Without this, "otlp/gateway" is an unknown type and the
+	// program refuses the configuration it was handed.
+	_ "github.com/lesomnus/mkot/otlp"
 	"github.com/lesomnus/otx"
 	"github.com/lesomnus/z"
 	"go.opentelemetry.io/otel/attribute"
