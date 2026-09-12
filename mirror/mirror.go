@@ -78,6 +78,13 @@ func (m *Mirror) repo(ctx context.Context, repo forge.Repo, since time.Time, r *
 		return z.Err(err, "ensure repository")
 	}
 
+	// What is already mirrored, read once. Asking per issue costs a search
+	// each, and that is the one thing forges meter tightly.
+	origins, err := m.Target.Origins(ctx, repo)
+	if err != nil {
+		return z.Err(err, "read origins")
+	}
+
 	// Labels first: a target rejects a label it has never heard of, and it
 	// rejects it on the write that carries the issue, so the issue is lost with
 	// it. Collected across the batch so this is one pass rather than one per
@@ -87,7 +94,7 @@ func (m *Mirror) repo(ctx context.Context, repo forge.Repo, since time.Time, r *
 	}
 
 	for _, i := range issues {
-		if err := m.issue(ctx, repo, i, r); err != nil {
+		if err := m.issue(ctx, repo, i, origins, r); err != nil {
 			return z.Err(err, "issue %d", i.Number)
 		}
 	}
@@ -95,7 +102,7 @@ func (m *Mirror) repo(ctx context.Context, repo forge.Repo, since time.Time, r *
 	return nil
 }
 
-func (m *Mirror) issue(ctx context.Context, repo forge.Repo, i forge.Issue, r *Result) error {
+func (m *Mirror) issue(ctx context.Context, repo forge.Repo, i forge.Issue, origins map[forge.Origin]forge.Ref, r *Result) error {
 	o := forge.Origin{
 		Forge:  m.Source.Name(),
 		Repo:   repo,
@@ -103,11 +110,9 @@ func (m *Mirror) issue(ctx context.Context, repo forge.Repo, i forge.Issue, r *R
 		Number: i.Number,
 	}
 
-	ref, found, err := m.Target.FindByOrigin(ctx, repo, o)
-	if err != nil {
-		return z.Err(err, "find by origin")
-	}
+	ref, found := origins[o]
 
+	var err error
 	if !found {
 		ref, err = m.Target.Create(ctx, repo, i, o)
 		if err != nil {
