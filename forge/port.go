@@ -44,13 +44,19 @@ type Target interface {
 	// whether it had to create it.
 	EnsureRepo(ctx context.Context, repo Repo) (bool, error)
 
-	// FindByOrigin looks up what this program previously created for o, by the
-	// marker in the body. A miss is not an error: it means not yet mirrored.
+	// Origins reads back everything this program previously created in one
+	// repository, keyed by what it was created from. A repository with nothing
+	// mirrored yet gives an empty map, not an error.
 	//
-	// The mapping is read back out of the target rather than kept beside it, so
-	// that losing or rolling back local state cannot make the program create a
+	// The mapping is read out of the target rather than kept beside it, so that
+	// losing or rolling back local state cannot make the program create a
 	// second copy of everything.
-	FindByOrigin(ctx context.Context, repo Repo, o Origin) (Ref, bool, error)
+	//
+	// It is read once for the repository rather than once for each issue in it.
+	// One at a time means a search per issue, and forges rate-limit search far
+	// harder than listing — GitLab CE allows thirty a minute by default, which
+	// a first run over an organisation exhausts in seconds.
+	Origins(ctx context.Context, repo Repo) (map[Origin]Ref, error)
 
 	// Create writes a new issue or merge request and returns what it made.
 	Create(ctx context.Context, repo Repo, i Issue, o Origin) (Ref, error)
