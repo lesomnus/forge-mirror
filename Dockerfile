@@ -36,6 +36,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 	mkdir /dist \
 	&& GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o /dist/arm64 . \
 	&& GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /dist/amd64 . \
+	&& cp /etc/ssl/certs/ca-certificates.crt /dist/ \
 	&& "/dist/${TARGETARCH}" version
 
 FROM scratch AS build
@@ -47,6 +48,11 @@ FROM scratch AS app
 
 ARG TARGETARCH
 COPY "${TARGETARCH}" /forge-mirror
+
+# A scratch image has no trust store, so every TLS dial fails with "certificate
+# signed by unknown authority" — which is every call this program makes to a
+# forge. The bundle rides along in the build output next to the binaries.
+COPY ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
 USER 65532:65532
 ENTRYPOINT ["/forge-mirror"]
