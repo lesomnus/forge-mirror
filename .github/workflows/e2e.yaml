@@ -143,8 +143,18 @@ jobs:
             "${GITLAB}/api/v4/projects/${FIXTURE_OWNER}%2F${FIXTURE_REPO}/repository/branches" \
             | jq -r '.[] | "  branch \(.name)"'
 
-      - name: Build
-        run: go build -o forge-mirror .
+      # The image, not a binary on the runner. A `go build` here shares the
+      # runner's CA bundle, its libc and its filesystem, and the thing that
+      # ships has none of them — that is how an image with no trust store
+      # passed this job and then failed on its first real call.
+      - name: Build the image
+        run: |
+          set -eu
+          docker buildx bake build --set '*.platform=linux/amd64'
+          docker buildx bake app \
+            --set 'app.platform=linux/amd64' \
+            --set 'app.output=type=docker' \
+            --set 'app.tags=forge-mirror:e2e'
 
       - name: Configure
         run: |
@@ -157,13 +167,35 @@ jobs:
             token: "\${env:GL_TOKEN}"
             baseUrl: ${GITLAB}
             group: ${FIXTURE_OWNER}
+          otel:
+            exporters:
+              pretty: {}
+              # Declared and deliberately not wired into a provider: naming it is
+              # the whole point. An exporter type is resolved when the file is
+              # decoded, so a build that has not linked one in is refused right
+              # there — which is what happened in a real deployment while this
+              # job was green. Left unwired so nothing tries to reach a collector
+              # that is not running.
+              otlp/unwired:
+                endpoint: localhost:4317
+                tls:
+                  insecure: true
+            providers:
+              logger:
+                exporters:
+                  - pretty
           YAML
 
       - name: First run
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GL_TOKEN: ${{ env.GITLAB_TOKEN }}
-        run: ./forge-mirror --config e2e.yaml mirror
+        run: |
+          set -eu
+          docker run --rm --network host \
+            -e GH_TOKEN -e GL_TOKEN \
+            -v "$PWD/e2e.yaml:/e2e.yaml:ro" \
+            forge-mirror:e2e --config /e2e.yaml mirror
 
       - name: What landed
         run: |
@@ -220,7 +252,10 @@ jobs:
           GL_TOKEN: ${{ env.GITLAB_TOKEN }}
         run: |
           set -eu
-          ./forge-mirror --config e2e.yaml mirror | tee second.txt
+          docker run --rm --network host \
+            -e GH_TOKEN -e GL_TOKEN \
+            -v "$PWD/e2e.yaml:/e2e.yaml:ro" \
+            forge-mirror:e2e --config /e2e.yaml mirror | tee second.txt
           grep -q "created=0" second.txt \
             || { echo "FAIL: a second run over unchanged input created something" >&2; exit 1; }
 
