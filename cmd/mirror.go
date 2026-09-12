@@ -73,10 +73,13 @@ func NewCmdMirror() *xli.Command {
 			// or one that was only pretending, must not let the next one skip
 			// past what it did not copy.
 			//
-			// It records when this run *started*, not when it finished, so
-			// anything changed while it was in flight is looked at again.
+			// It records a little before this run *started*, not when it
+			// finished. Starting time covers anything changed while the run was
+			// in flight; the margin covers a source whose answer about what
+			// changed is an index that lags behind its own data, which is what
+			// GitHub's search is. Re-reading a few minutes costs a few updates.
 			if r.Failed == 0 && !c.DryRun {
-				if err := writeCursor(c.StatePath, started); err != nil {
+				if err := writeCursor(c.StatePath, started.Add(-cursorMargin)); err != nil {
 					// The run did its work. Failing to save the optimisation
 					// only costs the next run some reading.
 					cmd.Println(fmt.Sprintf("[mirror] cursor: %v", err))

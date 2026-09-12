@@ -32,6 +32,20 @@ type Source interface {
 	Comments(ctx context.Context, repo Repo, number int) ([]Comment, error)
 }
 
+// Discoverer is an optional capability a [Source] may implement: naming the
+// repositories that have something changed since a time, without asking each
+// one.
+//
+// It reports whether its answer can be used. A source that cannot answer for
+// the window it was handed — because the window is unbounded, or wider than it
+// is able to page through, or because asking failed — says so, and the caller
+// lists every repository instead. Answering partially without saying so would
+// silently drop repositories from a run, and a mirror that quietly skips things
+// is worse than a slow one.
+type Discoverer interface {
+	ReposChangedSince(ctx context.Context, since time.Time) ([]Repo, bool, error)
+}
+
 // Target is a forge written to.
 //
 // Every method is required to be idempotent. This program is a CronJob that can

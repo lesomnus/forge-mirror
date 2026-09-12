@@ -77,6 +77,15 @@ func writeCursor(p string, t time.Time) error {
 	return nil
 }
 
+// cursorMargin is how far before a run's start its cursor is recorded.
+//
+// Discovering what changed can go through an index rather than the data — the
+// way GitHub's issue search does — and an index can be behind. Something
+// written just before a run, but indexed just after it, would fall in the gap
+// between the two if the cursor sat exactly on the start time. Five minutes of
+// overlap is a handful of rewritten issues and closes it.
+const cursorMargin = 5 * time.Minute
+
 // sinceFor is how far back this run looks.
 //
 // limit is what the configuration allows, zero meaning no limit, and at is

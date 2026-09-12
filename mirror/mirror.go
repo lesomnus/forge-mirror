@@ -39,9 +39,9 @@ type Mirror struct {
 func (m *Mirror) Run(ctx context.Context, since time.Time) (Result, error) {
 	var r Result
 
-	repos, err := m.Source.Repos(ctx)
+	repos, err := m.repos(ctx, since)
 	if err != nil {
-		return r, z.Err(err, "list repositories")
+		return r, err
 	}
 
 	for _, repo := range repos {
@@ -55,6 +55,34 @@ func (m *Mirror) Run(ctx context.Context, since time.Time) (Result, error) {
 	}
 
 	return r, nil
+}
+
+// repos is what this run will look at.
+//
+// A source that can say which repositories changed is asked first. For an
+// organisation of any size that is a couple of requests rather than one for
+// every repository, and it is one for every repository that almost every run
+// spends almost all of itself on: nothing has changed in nearly all of them.
+//
+// It is only ever an optimisation. A source that has no answer, or one it says
+// cannot be used, sends this back to listing everything — which is what always
+// happened and is always correct.
+func (m *Mirror) repos(ctx context.Context, since time.Time) ([]forge.Repo, error) {
+	if d, ok := m.Source.(forge.Discoverer); ok {
+		rs, usable, err := d.ReposChangedSince(ctx, since)
+		if err != nil {
+			return nil, z.Err(err, "discover repositories")
+		}
+		if usable {
+			return rs, nil
+		}
+	}
+
+	rs, err := m.Source.Repos(ctx)
+	if err != nil {
+		return nil, z.Err(err, "list repositories")
+	}
+	return rs, nil
 }
 
 func (m *Mirror) repo(ctx context.Context, repo forge.Repo, since time.Time, r *Result) error {

@@ -4,7 +4,9 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -119,6 +121,70 @@ func isNotFound(err error) bool {
 	return false
 }
 
+// searchResultLimit is how far GitHub's search will page. Matches past it
+// cannot be reached at all, so an answer that would need more of them is not an
+// answer.
+const searchResultLimit = 1000
+
+// ReposChangedSince implements [forge.Discoverer].
+func (s *Source) ReposChangedSince(ctx context.Context, since time.Time) ([]forge.Repo, bool, error) {
+	// Named repositories are already the short list, and an unbounded window is
+	// what search cannot answer: the whole history is far past what it pages.
+	if len(s.repos) > 0 || since.IsZero() {
+		return nil, false, nil
+	}
+
+	seen := map[string]struct{}{}
+	// A fine-grained token refuses a search that says neither, so the two halves
+	// are asked separately. Two requests for an organisation is still two rather
+	// than one for every repository in it.
+	for _, kind := range []string{"is:issue", "is:pull-request"} {
+		q := fmt.Sprintf("user:%s %s updated:>%s",
+			s.owner, kind, since.UTC().Format(time.RFC3339))
+
+		opt := &github.SearchOptions{ListOptions: github.ListOptions{PerPage: 100}}
+		for {
+			res, page, err := s.c.Search.Issues(ctx, q, opt)
+			if err != nil {
+				// This is an optimisation, and everything that can go wrong with
+				// it — the separate and much smaller search rate limit, a token
+				// not allowed to search, a query a future GitHub rejects — has
+				// the same right answer: list the repositories instead.
+				return nil, false, nil
+			}
+			if res.GetIncompleteResults() || res.GetTotal() > searchResultLimit {
+				return nil, false, nil
+			}
+			for _, i := range res.Issues {
+				if name, ok := repoOfSearchResult(i.GetRepositoryURL()); ok {
+					seen[name] = struct{}{}
+				}
+			}
+			if page.NextPage == 0 {
+				break
+			}
+			opt.ListOptions.Page = page.NextPage
+		}
+	}
+
+	rs := make([]forge.Repo, 0, len(seen))
+	for name := range seen {
+		rs = append(rs, forge.Repo{Owner: s.owner, Name: name})
+	}
+	// Sorted so a run is reproducible and its log reads the same way twice.
+	slices.SortFunc(rs, func(a, b forge.Repo) int { return strings.Compare(a.Name, b.Name) })
+	return rs, true, nil
+}
+
+// repoOfSearchResult takes the repository name out of the API URL a search
+// result carries, which looks like ".../repos/OWNER/NAME".
+func repoOfSearchResult(u string) (string, bool) {
+	i := strings.LastIndex(u, "/")
+	if i < 0 || i+1 >= len(u) {
+		return "", false
+	}
+	return u[i+1:], true
+}
 
 func (s *Source) Issues(ctx context.Context, repo forge.Repo, since time.Time) ([]forge.Issue, error) {
 	// GitHub returns pull requests from the issues endpoint as well: they share
