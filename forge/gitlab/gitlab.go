@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/lesomnus/forge-mirror/forge"
 	"github.com/lesomnus/z"
@@ -146,43 +145,74 @@ func (t *Target) project(ctx context.Context, repo forge.Repo) (*gl.Project, err
 // unindexed scan, so an index may be kept as a cache; it must stay rebuildable
 // from here, or losing it would make the program create a second copy of
 // everything.
-func (t *Target) FindByOrigin(ctx context.Context, repo forge.Repo, o forge.Origin) (forge.Ref, bool, error) {
-	marker := forge.Marker(o)
+func (t *Target) Origins(ctx context.Context, repo forge.Repo) (map[forge.Origin]forge.Ref, error) {
 	pid := t.path(repo)
+	out := map[forge.Origin]forge.Ref{}
 
-	is, _, err := t.c.Issues.ListProjectIssues(pid, &gl.ListProjectIssuesOptions{
-		Search:      gl.Ptr(marker),
-		In:          gl.Ptr("description"),
-		ListOptions: gl.ListOptions{PerPage: 2},
-	}, gl.WithContext(ctx))
-	if err != nil && !isNotFound(err) {
-		return forge.Ref{}, false, z.Err(err, "search issues")
-	}
-	for _, i := range is {
-		if strings.Contains(i.Description, marker) {
-			return forge.Ref{Kind: forge.KindIssue, ID: i.IID}, true, nil
+	// Both listings are walked to the end. The marker lives in the body and no
+	// forge offers a server-side "has one", so every page has to be looked at
+	// either way — but this is one pass over the repository instead of a search
+	// for every issue in it.
+	//
+	// A project that is not there yet is not an error: it means nothing has
+	// been mirrored into it, which is what the empty map says. That is the
+	// state the target is in on the day it is needed.
+	var page int64 = 1
+	for {
+		is, res, err := t.c.Issues.ListProjectIssues(pid, &gl.ListProjectIssuesOptions{
+			State:       gl.Ptr("all"),
+			ListOptions: gl.ListOptions{PerPage: 100, Page: page},
+		}, gl.WithContext(ctx))
+		if err != nil {
+			if isNotFound(err) {
+				return out, nil
+			}
+			return nil, z.Err(err, "list issues")
 		}
-	}
-
-	// No `in` here: the merge request listing does not take it, so the search
-	// spans whatever it spans. The Contains check below is what actually
-	// decides, for both listings — the search only narrows what has to be
-	// looked at, and a target that widened it would cost a little time, not
-	// correctness.
-	ms, _, err := t.c.MergeRequests.ListProjectMergeRequests(pid, &gl.ListProjectMergeRequestsOptions{
-		Search:      gl.Ptr(marker),
-		ListOptions: gl.ListOptions{PerPage: 2},
-	}, gl.WithContext(ctx))
-	if err != nil && !isNotFound(err) {
-		return forge.Ref{}, false, z.Err(err, "search merge requests")
-	}
-	for _, m := range ms {
-		if strings.Contains(m.Description, marker) {
-			return forge.Ref{Kind: forge.KindPull, ID: m.IID}, true, nil
+		for _, i := range is {
+			if o, ok := forge.ParseOrigin(i.Description); ok {
+				out[o] = forge.Ref{Kind: forge.KindIssue, ID: i.IID}
+			}
 		}
+		if res.NextPage == 0 {
+			break
+		}
+		page = res.NextPage
 	}
 
-	return forge.Ref{}, false, nil
+	page = 1
+	for {
+		ms, res, err := t.c.MergeRequests.ListProjectMergeRequests(pid, &gl.ListProjectMergeRequestsOptions{
+			State:       gl.Ptr("all"),
+			ListOptions: gl.ListOptions{PerPage: 100, Page: page},
+		}, gl.WithContext(ctx))
+		if err != nil {
+			if isNotFound(err) {
+				return out, nil
+			}
+			return nil, z.Err(err, "list merge requests")
+		}
+		for _, m := range ms {
+			o, ok := forge.ParseOrigin(m.Description)
+			if !ok {
+				continue
+			}
+			// An issue already claimed for this origin wins. One origin should
+			// only ever have produced one of the two, but if both are somehow
+			// there, preferring the issue keeps the older behaviour: the search
+			// this replaced looked at issues first and returned on the first
+			// hit.
+			if _, taken := out[o]; !taken {
+				out[o] = forge.Ref{Kind: forge.KindPull, ID: m.IID}
+			}
+		}
+		if res.NextPage == 0 {
+			break
+		}
+		page = res.NextPage
+	}
+
+	return out, nil
 }
 
 func (t *Target) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o forge.Origin) (forge.Ref, error) {
