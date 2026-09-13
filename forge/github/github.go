@@ -238,7 +238,7 @@ func (s *Source) fillBranches(ctx context.Context, repo forge.Repo, i *forge.Iss
 	return nil
 }
 
-func (s *Source) Comments(ctx context.Context, repo forge.Repo, number int) ([]forge.Comment, error) {
+func (s *Source) Comments(ctx context.Context, repo forge.Repo, i forge.Issue) ([]forge.Comment, error) {
 	opt := &github.IssueListCommentsOptions{
 		Sort:        github.Ptr("created"),
 		Direction:   github.Ptr("asc"),
@@ -247,7 +247,7 @@ func (s *Source) Comments(ctx context.Context, repo forge.Repo, number int) ([]f
 
 	var cs []forge.Comment
 	for {
-		page, res, err := s.c.Issues.ListComments(ctx, repo.Owner, repo.Name, number, opt)
+		page, res, err := s.c.Issues.ListComments(ctx, repo.Owner, repo.Name, i.Number, opt)
 		if err != nil {
 			return nil, z.Err(err, "list comments")
 		}
