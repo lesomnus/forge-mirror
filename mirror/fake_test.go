@@ -58,11 +58,13 @@ type fakeTarget struct {
 
 	Creates int
 	Updates int
+	States  int
 }
 
 type stored struct {
-	kind forge.Kind
-	body string
+	kind  forge.Kind
+	body  string
+	state forge.State
 }
 
 func newFakeTarget() *fakeTarget {
@@ -126,5 +128,13 @@ func (t *fakeTarget) Comments(ctx context.Context, repo forge.Repo, ref forge.Re
 
 func (t *fakeTarget) Comment(ctx context.Context, repo forge.Repo, ref forge.Ref, body string) error {
 	t.notes[ref.ID] = append(t.notes[ref.ID], body)
+	return nil
+}
+
+func (t *fakeTarget) SetState(ctx context.Context, repo forge.Repo, ref forge.Ref, s forge.State) error {
+	if v, ok := t.issues[ref.ID]; ok {
+		v.state = s
+	}
+	t.States++
 	return nil
 }
