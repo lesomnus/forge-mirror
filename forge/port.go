@@ -29,7 +29,12 @@ type Source interface {
 	Issues(ctx context.Context, repo Repo, since time.Time) ([]Issue, error)
 
 	// Comments returns the notes on one issue, oldest first.
-	Comments(ctx context.Context, repo Repo, number int) ([]Comment, error)
+	//
+	// It takes the issue rather than its number because a number alone does not
+	// say what it numbers. GitHub gives issues and pull requests one space, so
+	// there a number is enough; GitLab numbers them separately and iid 5 can be
+	// both an issue and a merge request.
+	Comments(ctx context.Context, repo Repo, i Issue) ([]Comment, error)
 }
 
 // Discoverer is an optional capability a [Source] may implement: naming the

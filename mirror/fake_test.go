@@ -35,8 +35,8 @@ func (s *fakeSource) Issues(ctx context.Context, repo forge.Repo, since time.Tim
 	return out, nil
 }
 
-func (s *fakeSource) Comments(ctx context.Context, repo forge.Repo, number int) ([]forge.Comment, error) {
-	return s.comments[number], nil
+func (s *fakeSource) Comments(ctx context.Context, repo forge.Repo, i forge.Issue) ([]forge.Comment, error) {
+	return s.comments[i.Number], nil
 }
 
 // fakeTarget stores what was written and answers lookups the way the real one
