@@ -172,7 +172,7 @@ func (m *Mirror) issue(ctx context.Context, repo forge.Repo, i forge.Issue, orig
 // writes a note in the target by hand, and comparing text breaks when somebody
 // edits one.
 func (m *Mirror) comments(ctx context.Context, repo forge.Repo, i forge.Issue, ref forge.Ref) (int, error) {
-	src, err := m.Source.Comments(ctx, repo, i.Number)
+	src, err := m.Source.Comments(ctx, repo, i)
 	if err != nil {
 		return 0, z.Err(err, "list source comments")
 	}
