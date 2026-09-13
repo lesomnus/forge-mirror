@@ -404,6 +404,24 @@ func (t *Target) listMilestones(ctx context.Context, pid string) (map[string]int
 	return byTitle, nil
 }
 
+// SetState implements [forge.Target]. Asking for the state something is
+// already in is not an error here: GitLab takes the event and does nothing,
+// which saves a read to find out.
+func (t *Target) SetState(ctx context.Context, repo forge.Repo, ref forge.Ref, s forge.State) error {
+	pid := t.path(repo)
+	ev := stateEvent(s, "close", "reopen")
+
+	if ref.Kind == forge.KindPull {
+		_, _, err := t.c.MergeRequests.UpdateMergeRequest(pid, ref.ID,
+			&gl.UpdateMergeRequestOptions{StateEvent: ev}, gl.WithContext(ctx))
+		return z.ErrIf(err, "set merge request state")
+	}
+
+	_, _, err := t.c.Issues.UpdateIssue(pid, ref.ID,
+		&gl.UpdateIssueOptions{StateEvent: ev}, gl.WithContext(ctx))
+	return z.ErrIf(err, "set issue state")
+}
+
 // EnsureLabels creates labels that are not there yet.
 //
 // A label unknown to the project is rejected on write, so this runs first. An

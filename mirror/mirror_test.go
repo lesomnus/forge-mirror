@@ -179,3 +179,64 @@ func TestDryRunWritesNothing(t *testing.T) {
 	require.Equal(t, 0, tgt.Creates)
 	require.Empty(t, tgt.repos)
 }
+
+// The restore reads the mirror, and nearly everything it finds there is the
+// mirror's own work. Copying those again would leave a copy of the copy beside
+// the original, which is the failure this guards.
+func TestReflectsOntoTheOriginalRatherThanCopyingIt(t *testing.T) {
+	const (
+		originalID  = 42
+		originalNum = 42
+	)
+
+	repo := forge.Repo{Owner: "acme", Name: "widget"}
+	origin := forge.Origin{
+		Forge: "fake", Repo: repo, Kind: forge.KindIssue, Number: originalNum,
+	}
+
+	// What the mirror wrote into GitLab, marker and all, now read back as a
+	// source item. Somebody closed it and left a note while the outage lasted.
+	copied := forge.Issue{
+		Number:    7,
+		Kind:      forge.KindIssue,
+		Title:     "Gripper drops payload",
+		Body:      forge.Render(forge.Issue{Title: "Gripper drops payload", Body: "it does"}, origin),
+		State:     forge.StateClosed,
+		UpdatedAt: time.Now(),
+	}
+
+	src := &fakeSource{
+		name:   "gitlab",
+		repos:  []forge.Repo{repo},
+		issues: map[string][]forge.Issue{repo.String(): {copied}},
+		comments: map[int][]forge.Comment{
+			7: {
+				// Written by the mirror on the way in: the original already has
+				// it, and it must not come back.
+				{ID: 100, Body: "quoted\n\n" + forge.NoteMarker(900)},
+				// Written by a person during the outage.
+				{ID: 101, Body: "reproduced on the bench"},
+			},
+		},
+	}
+
+	dst := newFakeTarget()
+	dst.repos[repo.String()] = true
+	dst.issues[originalID] = &stored{kind: forge.KindIssue, body: "it does", state: forge.StateOpen}
+
+	m := &mirror.Mirror{Source: src, Target: dst}
+	r, err := m.Run(context.Background(), time.Time{})
+	require.NoError(t, err)
+
+	require.Equal(t, 0, dst.Creates, "the original must not be copied again")
+	require.Equal(t, 1, r.Updated)
+
+	require.Equal(t, forge.StateClosed, dst.issues[originalID].state,
+		"closing the copy should close the original")
+	require.Equal(t, "it does", dst.issues[originalID].body,
+		"the original's body must be left alone")
+
+	require.Len(t, dst.notes[originalID], 1, "only the note a person wrote comes back")
+	require.Contains(t, dst.notes[originalID][0], "reproduced on the bench")
+	require.Equal(t, 1, r.Notes)
+}

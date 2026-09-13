@@ -131,6 +131,15 @@ func (m *Mirror) repo(ctx context.Context, repo forge.Repo, since time.Time, r *
 }
 
 func (m *Mirror) issue(ctx context.Context, repo forge.Repo, i forge.Issue, origins map[forge.Origin]forge.Ref, r *Result) error {
+	// An item whose marker names the target is not something to copy — it is
+	// the copy, and the target holds the original. This is the restore after an
+	// outage reading the mirror back: nearly everything in there was written by
+	// the forward direction, and creating from it would leave a copy of the copy
+	// beside the original.
+	if back, ok := forge.ParseOrigin(i.Body); ok && back.Forge == m.Target.Name() {
+		return m.reflect(ctx, repo, i, forge.Ref{Kind: back.Kind, ID: int64(back.Number)}, r)
+	}
+
 	o := forge.Origin{
 		Forge:  m.Source.Name(),
 		Repo:   repo,
@@ -165,6 +174,32 @@ func (m *Mirror) issue(ctx context.Context, repo forge.Repo, i forge.Issue, orig
 	return nil
 }
 
+// reflect carries back the part of a copy that can be carried back.
+//
+// Not the body: see [forge.Target.SetState]. Not the title or the labels either,
+// for the same reason in smaller form — nothing distinguishes an edit somebody
+// made during the outage from what the forward direction rendered, so writing
+// them back would overwrite the original with a picture of itself.
+//
+// What is left is the two things a copy can say truthfully: whether people
+// closed it, and what they wrote on it. A title edited in the mirror is lost.
+// That is the trade, and it is the right way round — losing an edit beats
+// corrupting the thing it was an edit of.
+func (m *Mirror) reflect(ctx context.Context, repo forge.Repo, i forge.Issue, ref forge.Ref, r *Result) error {
+	if err := m.Target.SetState(ctx, repo, ref, i.State); err != nil {
+		return z.Err(err, "set state")
+	}
+
+	n, err := m.comments(ctx, repo, i, ref)
+	if err != nil {
+		return err
+	}
+
+	r.Notes += n
+	r.Updated++
+	return nil
+}
+
 // comments appends the source's comments that are not in the target yet.
 //
 // Which ones those are is decided by the marker each mirrored comment carries,
@@ -194,6 +229,14 @@ func (m *Mirror) comments(ctx context.Context, repo forge.Repo, i forge.Issue, r
 
 	n := 0
 	for _, c := range src {
+		// A source comment carrying a note marker is itself a copy of one of the
+		// target's, so the target has it by definition — by its own id, not by
+		// the one this marker would be looked up under. True whichever way the
+		// mirror is pointing: forward it is a comment the restore pushed here,
+		// backward it is one the mirror wrote.
+		if _, mirrored := forge.NoteID(c.Body); mirrored {
+			continue
+		}
 		if _, ok := have[c.ID]; ok {
 			continue
 		}

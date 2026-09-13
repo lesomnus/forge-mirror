@@ -94,4 +94,14 @@ type Target interface {
 
 	// Comment appends one note.
 	Comment(ctx context.Context, repo Repo, ref Ref, body string) error
+
+	// SetState moves one to open or closed and touches nothing else.
+	//
+	// Update will not do for this. The restore reads copies the forward
+	// direction rendered, and a copy's body *is* that rendering — decoration,
+	// marker and all. Writing it onto the original would wrap the original in a
+	// rendering of itself and stamp it as somebody's copy. State is one of the
+	// only two things a copy can say about its original without lying; the other
+	// is the comments people added to it.
+	SetState(ctx context.Context, repo Repo, ref Ref, s State) error
 }
