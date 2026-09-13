@@ -7,10 +7,30 @@ import "time"
 // nothing and costs a doubled name everywhere the environment is involved —
 // `FORGE_MIRROR_MIRROR_SOURCE_TOKEN` rather than `FORGE_MIRROR_SOURCE_TOKEN`.
 
+// Direction says which way a run copies.
+//
+// The two are not mirror images of each other. The mirror runs on a schedule,
+// reads everything and writes copies; the restore runs once after an outage,
+// and most of what it reads is those copies — which it must reflect onto the
+// originals rather than copy again.
+type Direction string
+
+const (
+	// GitHubToGitLab is the mirror: the thing that runs every hour.
+	GitHubToGitLab Direction = "github-to-gitlab"
+
+	// GitLabToGitHub is the restore: the thing that runs once, afterwards,
+	// with somebody watching. It writes to the forge everyone uses, so it does
+	// not share the mirror's credentials — see the token prompt.
+	GitLabToGitHub Direction = "gitlab-to-github"
+)
+
 type SourceConfig struct {
 	Token string `yaml:"token"`
 
-	// Owner is the user or organisation to read from.
+	// Owner is the namespace to read from, whichever forge is on this side: a
+	// user or organisation on GitHub, a group on GitLab. It is named for the
+	// direction that runs every day.
 	Owner string `yaml:"owner"`
 
 	// Repos limits which repositories are mirrored. Empty means every
@@ -26,8 +46,9 @@ type TargetConfig struct {
 	Token   string `yaml:"token"`
 	BaseURL string `yaml:"baseUrl"`
 
-	// Group is the namespace mirrored projects live in. Defaults to the
-	// source's owner.
+	// Group is the namespace written into, whichever forge is on this side: a
+	// group on GitLab, a user or organisation on GitHub. Defaults to the
+	// source's owner. Named, like Owner, for the direction that runs every day.
 	Group string `yaml:"group"`
 }
 

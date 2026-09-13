@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 
 	"github.com/goccy/go-yaml"
@@ -19,6 +20,9 @@ type Config struct {
 
 	Source SourceConfig `yaml:"source"`
 	Target TargetConfig `yaml:"target"`
+
+	// Direction is which way this run copies. Empty is the mirror.
+	Direction Direction `yaml:"direction"`
 
 	Since  Since `yaml:"since"`
 	DryRun bool  `yaml:"dryRun"`
@@ -64,6 +68,16 @@ func (c *Config) Path() string {
 }
 
 func (c *Config) Evaluate() error {
+	if c.Direction == "" {
+		c.Direction = GitHubToGitLab
+	}
+	switch c.Direction {
+	case GitHubToGitLab, GitLabToGitHub:
+	default:
+		return fmt.Errorf("direction must be %q or %q, not %q",
+			GitHubToGitLab, GitLabToGitHub, c.Direction)
+	}
+
 	// The target group defaults to the source owner. Mirroring acme/* into a
 	// group named something else is possible and occasionally wanted, but the
 	// same name is what anyone would assume from looking at either side.

@@ -85,6 +85,25 @@ func UseConfigInit(ctx context.Context, cmd *xli.Command) (context.Context, *con
 		)
 	}
 
+	// A token the configuration does not carry is asked for, when there is a
+	// terminal to ask. The restore needs one that can write and must not keep
+	// it; see askToken. Without a terminal this changes nothing and the check
+	// below still says what is missing.
+	if c.Source.Token == "" {
+		if t, err := askToken("source token"); err != nil {
+			return nil, nil, err
+		} else {
+			c.Source.Token = t
+		}
+	}
+	if c.Target.Token == "" {
+		if t, err := askToken("target token"); err != nil {
+			return nil, nil, err
+		} else {
+			c.Target.Token = t
+		}
+	}
+
 	if err := c.Evaluate(); err != nil {
 		return nil, nil, z.Err(err, "evaluate config")
 	}

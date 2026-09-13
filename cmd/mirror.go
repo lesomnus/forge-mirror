@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lesomnus/forge-mirror/cmd/config"
 	"github.com/lesomnus/forge-mirror/forge"
 	gh "github.com/lesomnus/forge-mirror/forge/github"
 	gl "github.com/lesomnus/forge-mirror/forge/gitlab"
@@ -27,23 +28,54 @@ func NewCmdMirror() *xli.Command {
 			c := use_config.Must(ctx)
 			flg.VisitP(cmd, "dry-run", &c.DryRun)
 
-			src, err := gh.NewSource(gh.Options{
-				Token:   c.Source.Token,
-				Owner:   c.Source.Owner,
-				Repos:   c.Source.Repos,
-				BaseURL: c.Source.BaseURL,
-			})
-			if err != nil {
-				return z.Err(err, "source")
-			}
+			var (
+				src forge.Source
+				dst forge.Target
+				err error
+			)
+			switch c.Direction {
+			case config.GitLabToGitHub:
+				// The restore. `source.owner` is the GitLab group and
+				// `target.group` the GitHub owner — both fields mean "the
+				// namespace on this side", and they are named for the other
+				// direction because that is the one that runs every day.
+				src, err = gl.NewSource(gl.Options{
+					Token:   c.Source.Token,
+					BaseURL: c.Source.BaseURL,
+					Group:   c.Source.Owner,
+				})
+				if err != nil {
+					return z.Err(err, "source")
+				}
 
-			dst, err := gl.NewTarget(gl.Options{
-				Token:   c.Target.Token,
-				BaseURL: c.Target.BaseURL,
-				Group:   c.Target.Group,
-			})
-			if err != nil {
-				return z.Err(err, "target")
+				dst, err = gh.NewTarget(gh.Options{
+					Token:   c.Target.Token,
+					Owner:   c.Target.Group,
+					BaseURL: c.Target.BaseURL,
+				})
+				if err != nil {
+					return z.Err(err, "target")
+				}
+
+			default:
+				src, err = gh.NewSource(gh.Options{
+					Token:   c.Source.Token,
+					Owner:   c.Source.Owner,
+					Repos:   c.Source.Repos,
+					BaseURL: c.Source.BaseURL,
+				})
+				if err != nil {
+					return z.Err(err, "source")
+				}
+
+				dst, err = gl.NewTarget(gl.Options{
+					Token:   c.Target.Token,
+					BaseURL: c.Target.BaseURL,
+					Group:   c.Target.Group,
+				})
+				if err != nil {
+					return z.Err(err, "target")
+				}
 			}
 
 			// Where the last clean run got to, capped by how far back the
@@ -93,9 +125,12 @@ func NewCmdMirror() *xli.Command {
 				cmd.Println(fmt.Sprintf("[mirror] telemetry: %v", err))
 			}
 
+			// The direction is in the line because the two runs look alike in
+			// a log and are not alike at all: one copies, the other writes to
+			// the forge everybody uses.
 			cmd.Println(fmt.Sprintf(
-				"[mirror] repos=%d created=%d updated=%d notes=%d failed=%d",
-				r.Repos, r.Created, r.Updated, r.Notes, r.Failed))
+				"[mirror] %s repos=%d created=%d updated=%d notes=%d failed=%d",
+				c.Direction, r.Repos, r.Created, r.Updated, r.Notes, r.Failed))
 
 			if r.Failed > 0 {
 				return fmt.Errorf("%d repositories failed", r.Failed)
