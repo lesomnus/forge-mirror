@@ -245,14 +245,25 @@ func (t *Target) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o f
 	//   the branch already has an open merge request — GitLab allows one per
 	//     source branch, while GitHub allows several pull requests from one
 	//     branch as long as their bases differ, so a source can hold more of
-	//     them than a target can take.
+	//     them than a target can take;
+	//
+	//   head and base are the same name — a pull request **from a fork**, where
+	//     the two are branches of two repositories and only the names collide.
+	//     `i.Head` and `i.Base` are bare names, so in one project they are one
+	//     ref, and GitLab refuses source equal to target. It is ordinary rather
+	//     than unlucky: somebody branching in their fork uses the name they
+	//     would have used here.
 	//
 	// Either way it is mirrored as an issue, the same form a closed pull request
 	// takes. The marker still records that it was a pull request, so what is
 	// lost is the link between the two branches — and an issue holding the
 	// discussion beats failing the whole repository, which is what the second
 	// case did until it was seen in a first run over a real organisation.
-	if forge.TargetKind(i) == forge.KindPull && t.hasBranches(ctx, pid, i.Head, i.Base) {
+	//
+	// The third is read off `i` rather than from the answer, because it is
+	// knowable before the call and the answer is a `422` whose other causes are
+	// not ordinary — widening `isConflict` to take it would swallow those too.
+	if forge.TargetKind(i) == forge.KindPull && mergeable(i) && t.hasBranches(ctx, pid, i.Head, i.Base) {
 		m, _, err := t.c.MergeRequests.CreateMergeRequest(pid, &gl.CreateMergeRequestOptions{
 			Title:        gl.Ptr(i.Title),
 			Description:  gl.Ptr(body),
@@ -506,6 +517,14 @@ func stateEvent(s forge.State, closed string, open string) *string {
 // therefore never sees a 404, and "not there yet" — the normal case on a target
 // that has never been mirrored into — comes back as a hard failure.
 func isNotFound(err error) bool { return errors.Is(err, gl.ErrNotFound) }
+
+// mergeable is whether the two ends of a pull request can be the two ends of a
+// merge request in one project: two names, and not the same one.
+//
+// Empty is left to `hasBranches`, which already refuses it — this answers the
+// one thing a branch lookup cannot, since both names exist when a fork's branch
+// shares a name with the base.
+func mergeable(i forge.Issue) bool { return i.Head != i.Base }
 
 func isConflict(err error) bool { return hasStatus(err, http.StatusConflict) }
 
