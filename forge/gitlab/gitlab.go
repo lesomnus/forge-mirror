@@ -316,14 +316,7 @@ func (t *Target) Update(ctx context.Context, repo forge.Repo, ref forge.Ref, i f
 	}
 
 	if ref.Kind == forge.KindPull {
-		_, _, err := t.c.MergeRequests.UpdateMergeRequest(pid, ref.ID, &gl.UpdateMergeRequestOptions{
-			Title:       gl.Ptr(i.Title),
-			Description: gl.Ptr(body),
-			Labels:      labelsOf(i),
-			MilestoneID: milestone,
-			StateEvent:  stateEvent(i.State, "close", "reopen"),
-		}, gl.WithContext(ctx))
-		return z.ErrIf(err, "update merge request")
+		return t.updateMergeRequest(ctx, pid, ref.ID, i, body, milestone)
 	}
 
 	_, _, err = t.c.Issues.UpdateIssue(pid, ref.ID, &gl.UpdateIssueOptions{
@@ -334,6 +327,77 @@ func (t *Target) Update(ctx context.Context, repo forge.Repo, ref forge.Ref, i f
 		StateEvent:  stateEvent(i.State, "close", "reopen"),
 	}, gl.WithContext(ctx))
 	return z.ErrIf(err, "update issue")
+}
+
+// updateMergeRequest reads the merge request before writing it, which an issue
+// does not need, for two things the source can change under it (#21).
+//
+// The base. A pull request is retargeted by hand, or by GitHub when the branch
+// it was opened on top of is merged and deleted — and the repository mirror then
+// deletes that branch here too, leaving the merge request pointed at nothing.
+// It follows the source's base when that branch is here to point at. When it is
+// not, the old target stays: the next run tries again.
+//
+// The state. Sending `reopen` for a merge request that is already open used to
+// be a no-op. GitLab 19.5 checks for both branches before it reopens, open or
+// not, so the same request fails the repository on every run once the target
+// is gone. The event is sent only for a real change, and after the fields, so
+// a reopen is judged against the new target rather than the one it replaces.
+func (t *Target) updateMergeRequest(ctx context.Context, pid string, iid int64, i forge.Issue, body string, milestone *int64) error {
+	cur, _, err := t.c.MergeRequests.GetMergeRequest(pid, iid, nil, gl.WithContext(ctx))
+	if err != nil {
+		return z.Err(err, "get merge request")
+	}
+
+	opts := &gl.UpdateMergeRequestOptions{
+		Title:       gl.Ptr(i.Title),
+		Description: gl.Ptr(body),
+		Labels:      labelsOf(i),
+		MilestoneID: milestone,
+	}
+	if retarget(cur, i) && t.hasBranches(ctx, pid, i.Base) {
+		opts.TargetBranch = gl.Ptr(i.Base)
+	}
+
+	_, _, err = t.c.MergeRequests.UpdateMergeRequest(pid, iid, opts, gl.WithContext(ctx))
+	if err != nil && opts.TargetBranch != nil && isConflict(err) {
+		// Another open merge request already joins these two branches. GitLab
+		// holds one per pair, so this one keeps its target rather than taking
+		// the whole repository down with it.
+		opts.TargetBranch = nil
+		_, _, err = t.c.MergeRequests.UpdateMergeRequest(pid, iid, opts, gl.WithContext(ctx))
+	}
+	if err != nil {
+		return z.Err(err, "update merge request")
+	}
+
+	ev := mergeRequestStateEvent(cur.State, i.State)
+	if ev == nil {
+		return nil
+	}
+	_, _, err = t.c.MergeRequests.UpdateMergeRequest(pid, iid,
+		&gl.UpdateMergeRequestOptions{StateEvent: ev}, gl.WithContext(ctx))
+	return z.ErrIf(err, "set merge request state")
+}
+
+// retarget is whether the merge request should take the source's base: there is
+// one, it is not the target already, and it is not the merge request's own
+// source branch, which GitLab refuses as a target.
+func retarget(cur *gl.MergeRequest, i forge.Issue) bool {
+	return i.Base != "" && i.Base != cur.TargetBranch && i.Base != cur.SourceBranch
+}
+
+// mergeRequestStateEvent is the event that moves a merge request in state `cur`
+// (GitLab's word) to `want`, or nil when there is nothing to move. A merged or
+// locked merge request has no event that changes it, so it gets none.
+func mergeRequestStateEvent(cur string, want forge.State) *string {
+	switch {
+	case cur == "opened" && want == forge.StateClosed:
+		return gl.Ptr("close")
+	case cur == "closed" && want == forge.StateOpen:
+		return gl.Ptr("reopen")
+	}
+	return nil
 }
 
 // milestoneID is what the target calls the milestone titled `title`, making it

@@ -303,7 +303,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GL_TOKEN: ${{ env.GITLAB_TOKEN }}
         run: |
-          set -eu
+          # `pipefail`: without it the step's status is tee's, and a run that
+          # failed a repository passed here as long as it created nothing —
+          # which is how #21 first went by in this job.
+          set -euo pipefail
           docker run --rm --network host \
             -e GH_TOKEN -e GL_TOKEN \
             -v "$PWD/e2e.yaml:/e2e.yaml:ro" \
