@@ -69,7 +69,7 @@ jobs:
               prometheus_monitoring['enable'] = false;
               gitlab_rails['gitlab_shell_ssh_port'] = 2222;
             " \
-            gitlab/gitlab-ce:19.3.1-ce.0
+            gitlab/gitlab-ce:19.5.0-ce.0
 
       - name: Wait for it
         run: |
@@ -273,13 +273,40 @@ jobs:
           [ "$n" = "2" ] || { echo "FAIL: expected 2 comments, got ${n}" >&2; exit 1; }
           echo "OK"
 
+      # What production met (#21): a pull request opened on top of another
+      # one's branch, that branch merged and deleted, the pull request
+      # retargeted at the source — and the repository mirror deleting the old
+      # base here too. The merge request is left pointing at a branch that is
+      # gone, and the second run below has to bring it back to the source's
+      # base. Before the fix it failed the repository instead: GitLab 19.5
+      # refuses `reopen` without both branches, even for an open merge request.
+      - name: Strand a merge request on a deleted target
+        run: |
+          set -eu
+          p="${FIXTURE_OWNER}%2F${FIXTURE_REPO}"
+          iid=$(jq -r '.[] | select(.title == "Add open.txt to release") | .iid' mrs.json)
+          curl -fsS -X POST -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "${GITLAB}/api/v4/projects/${p}/repository/branches?branch=e2e-gone&ref=release" >/dev/null
+          curl -fsS -X PUT -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "${GITLAB}/api/v4/projects/${p}/merge_requests/${iid}" -d "target_branch=e2e-gone" >/dev/null
+          curl -fsS -X DELETE -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+            "${GITLAB}/api/v4/projects/${p}/repository/branches/e2e-gone"
+          got=$(curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                  "${GITLAB}/api/v4/projects/${p}/merge_requests/${iid}" | jq -r '"\(.state) \(.target_branch)"')
+          echo "!${iid}: ${got}"
+          [ "$got" = "opened e2e-gone" ] || { echo "FAIL: could not set the stage: ${got}" >&2; exit 1; }
+          echo "${iid}" > stranded.txt
+
       # The assertion this whole job exists for.
       - name: Second run creates nothing
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GL_TOKEN: ${{ env.GITLAB_TOKEN }}
         run: |
-          set -eu
+          # `pipefail`: without it the step's status is tee's, and a run that
+          # failed a repository passed here as long as it created nothing —
+          # which is how #21 first went by in this job.
+          set -euo pipefail
           docker run --rm --network host \
             -e GH_TOKEN -e GL_TOKEN \
             -v "$PWD/e2e.yaml:/e2e.yaml:ro" \
@@ -297,6 +324,17 @@ jobs:
                 "${GITLAB}/api/v4/projects/${p}/merge_requests?per_page=100&state=all" | jq length)
           [ "$i" = "6" ] && [ "$m" = "2" ] \
             || { echo "FAIL: counts changed on the second run: issues=${i} mrs=${m}" >&2; exit 1; }
+          echo "OK"
+
+      - name: The stranded merge request follows the source's base
+        run: |
+          set -eu
+          p="${FIXTURE_OWNER}%2F${FIXTURE_REPO}"
+          got=$(curl -fsS -H "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+                  "${GITLAB}/api/v4/projects/${p}/merge_requests/$(cat stranded.txt)" \
+                  | jq -r '"\(.state) \(.target_branch)"')
+          [ "$got" = "opened release" ] \
+            || { echo "FAIL: expected an open merge request into release, got: ${got}" >&2; exit 1; }
           echo "OK"
 
       - name: GitLab logs
