@@ -265,7 +265,7 @@ func (t *Target) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o f
 	// not ordinary — widening `isConflict` to take it would swallow those too.
 	if forge.TargetKind(i) == forge.KindPull && mergeable(i) && t.hasBranches(ctx, pid, i.Head, i.Base) {
 		m, _, err := t.c.MergeRequests.CreateMergeRequest(pid, &gl.CreateMergeRequestOptions{
-			Title:        gl.Ptr(i.Title),
+			Title:        gl.Ptr(titleOf(i)),
 			Description:  gl.Ptr(body),
 			SourceBranch: gl.Ptr(i.Head),
 			TargetBranch: gl.Ptr(i.Base),
@@ -283,7 +283,7 @@ func (t *Target) Create(ctx context.Context, repo forge.Repo, i forge.Issue, o f
 	}
 
 	n, _, err := t.c.Issues.CreateIssue(pid, &gl.CreateIssueOptions{
-		Title:       gl.Ptr(i.Title),
+		Title:       gl.Ptr(titleOf(i)),
 		Description: gl.Ptr(body),
 		Labels:      labelsOf(i),
 		MilestoneID: milestone,
@@ -320,7 +320,7 @@ func (t *Target) Update(ctx context.Context, repo forge.Repo, ref forge.Ref, i f
 	}
 
 	_, _, err = t.c.Issues.UpdateIssue(pid, ref.ID, &gl.UpdateIssueOptions{
-		Title:       gl.Ptr(i.Title),
+		Title:       gl.Ptr(titleOf(i)),
 		Description: gl.Ptr(body),
 		Labels:      labelsOf(i),
 		MilestoneID: milestone,
@@ -350,7 +350,7 @@ func (t *Target) updateMergeRequest(ctx context.Context, pid string, iid int64, 
 	}
 
 	opts := &gl.UpdateMergeRequestOptions{
-		Title:       gl.Ptr(i.Title),
+		Title:       gl.Ptr(titleOf(i)),
 		Description: gl.Ptr(body),
 		Labels:      labelsOf(i),
 		MilestoneID: milestone,
@@ -559,6 +559,21 @@ func (t *Target) Comment(ctx context.Context, repo forge.Repo, ref forge.Ref, bo
 	_, _, err := t.c.Notes.CreateIssueNote(pid, ref.ID,
 		&gl.CreateIssueNoteOptions{Body: gl.Ptr(body)}, gl.WithContext(ctx))
 	return z.ErrIf(err, "create issue note")
+}
+
+// maxTitle is the longest title GitLab takes for an issue or a merge request,
+// counted in characters. GitHub allows longer, and one longer title used to
+// fail its whole repository on every run with `400 title is too long`.
+const maxTitle = 255
+
+// titleOf is i's title cut to what GitLab takes, ending in "…" when it was cut.
+// The whole title stays on the source, which the description links to.
+func titleOf(i forge.Issue) string {
+	r := []rune(i.Title)
+	if len(r) <= maxTitle {
+		return i.Title
+	}
+	return string(r[:maxTitle-1]) + "…"
 }
 
 func labelsOf(i forge.Issue) *gl.LabelOptions {
